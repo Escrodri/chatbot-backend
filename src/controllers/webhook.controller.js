@@ -1,4 +1,5 @@
 import { config } from '../config/index.js';
+import { queueService, webhookService } from '../services/index.js';
 
 /**
  * Controlador de Webhooks de Meta (WhatsApp, Messenger, Instagram).
@@ -36,11 +37,18 @@ export const webhookController = {
   },
 
   /**
-   * Endpoint POST /api/webhook: Ingesta asíncrona de eventos.
-   * Se completa en T-12.
+   * Endpoint POST /api/webhook: Ingesta multi-canal asíncrona.
+   * Encola la tarea en P-Queue y responde HTTP 200 OK inmediatamente (< 50ms) para cumplir
+   * con las exigencias estrictas de tiempo de respuesta de Meta Graph API.
    */
   async handleInbound(req, res) {
-    res.status(200).json({ status: 'EVENT_RECEIVED' });
+    // 1. Encolar procesamiento en segundo plano (no bloqueante)
+    queueService.enqueue(async () => {
+      await webhookService.processPayload(req.body);
+    });
+
+    // 2. Retornar inmediatamente HTTP 200 a Meta
+    return res.status(200).json({ status: 'EVENT_RECEIVED' });
   }
 };
 
