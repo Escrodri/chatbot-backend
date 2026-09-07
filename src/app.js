@@ -1,8 +1,13 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { rawBodyJsonParser, errorHandler } from './middlewares/index.js';
 import { apiRouter } from './routes/index.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * Crea y configura la instancia de aplicación Express.
@@ -17,7 +22,10 @@ export function createApp() {
   }));
   app.use(cookieParser());
 
-  // 2. Parsers de petición con captura de rawBody para Meta
+  // 2. Servir archivos multimedia descargados localmente
+  app.use('/uploads', express.static(path.resolve(__dirname, '../uploads')));
+
+  // 3. Parsers de petición con captura de rawBody para Meta
   app.use(rawBodyJsonParser);
   app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
