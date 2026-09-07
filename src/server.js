@@ -1,8 +1,12 @@
 import http from 'http';
 import { app } from './app.js';
 import { config } from './config/index.js';
+import { socketManager } from './sockets/index.js';
 
 const server = http.createServer(app);
+
+// Inicializar Socket.io sobre el servidor HTTP
+socketManager.init(server);
 
 // Iniciar escucha del servidor HTTP
 server.listen(config.port, () => {

@@ -1,5 +1,6 @@
 import { channelRepository, contactRepository, conversationRepository, messageRepository, logRepository } from '../repositories/index.js';
 import { normalizerService } from './normalizer.service.js';
+import { socketManager } from '../sockets/index.js';
 
 /**
  * Servicio de Ingesta y Procesamiento de Webhooks:
@@ -69,6 +70,7 @@ export const webhookService = {
       const { metaMessageId, status, errors } = event.statusUpdate;
       if (metaMessageId) {
         await messageRepository.updateStatusByMetaId(metaMessageId, status, errors);
+        socketManager.emitMessageStatus(channel.id, metaMessageId, status);
       }
       await logRepository.logEvent({
         platform: event.platform,
@@ -98,6 +100,7 @@ export const webhookService = {
       // Pausar inmediatamente el bot (Protocolo Handover: handed_over)
       if (event.isEcho) {
         await conversationRepository.updateBotStatus(conversation.id, 'handed_over');
+        socketManager.emitBotStatus(channel.id, conversation.id, 'handed_over');
         console.log(`🤖 [HANDOVER] Bot pausado automáticamente para conversación #${conversation.id} por eco de operador.`);
       }
 
@@ -141,7 +144,23 @@ export const webhookService = {
         );
       }
 
-      // F. Registrar auditoría
+      // F. Notificar a los navegadores conectados en tiempo real vía WebSocket
+      const conversationSummary = {
+        id: conversation.id,
+        channel_id: channel.id,
+        contact_id: contact.id,
+        contact_name: contact.name,
+        contact_avatar: contact.avatar_url,
+        channel_name: channel.name,
+        channel_color: channel.color_tag,
+        platform: channel.platform,
+        last_message_text: event.message.text,
+        last_message_time: event.message.timestamp,
+        bot_status: event.isEcho ? 'handed_over' : conversation.bot_status
+      };
+      socketManager.emitNewMessage(channel.id, insertedMessage, conversationSummary);
+
+      // G. Registrar auditoría
       await logRepository.logEvent({
         platform: event.platform,
         channelIdentifier: event.channelIdentifier,
