@@ -109,6 +109,22 @@ export const messageRepository = {
   },
 
   /**
+   * Actualiza la URL local descargada para un archivo multimedia.
+   * 
+   * @param {number} messageId
+   * @param {string} mediaUrl
+   * @returns {Promise<void>}
+   */
+  async updateMediaUrl(messageId, mediaUrl) {
+    await query(
+      `UPDATE messages 
+       SET media_url = $1
+       WHERE id = $2`,
+      [mediaUrl, messageId]
+    );
+  },
+
+  /**
    * Actualiza el estado de entrega de un mensaje saliente a partir de un webhook de status de Meta.
    * 
    * @param {string} metaMessageId

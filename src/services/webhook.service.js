@@ -1,6 +1,8 @@
 import { channelRepository, contactRepository, conversationRepository, messageRepository, logRepository } from '../repositories/index.js';
 import { normalizerService } from './normalizer.service.js';
 import { socketManager } from '../sockets/index.js';
+import { botService } from './bot.service.js';
+import { mediaService } from './media.service.js';
 
 /**
  * Servicio de Ingesta y Procesamiento de Webhooks:
@@ -20,12 +22,16 @@ export const webhookService = {
     const events = normalizerService.normalizeWebhookPayload(rawPayload);
     if (events.length === 0) {
       // Registrar log informativo si no se detectaron eventos compatibles
-      await logRepository.logEvent({
-        platform: rawPayload.object || 'unknown',
-        eventType: 'unrecognized_or_empty',
-        rawPayload,
-        status: 'IGNORED'
-      });
+      try {
+        await logRepository.logEvent({
+          platform: rawPayload.object || 'unknown',
+          eventType: 'unrecognized_or_empty',
+          rawPayload,
+          status: 'IGNORED'
+        });
+      } catch (logErr) {
+        console.warn('⚠️ [LOG REPOSITORY WARNING] No se pudo persistir log informativo:', logErr.message);
+      }
       return;
     }
 
@@ -33,14 +39,18 @@ export const webhookService = {
       try {
         await this._processSingleEvent(event, rawPayload);
       } catch (err) {
-        console.error(`❌ [WEBHOOK PROCESS ERROR] Fallo procesando evento en canal ${event.channelIdentifier}:`, err);
-        await logRepository.logEvent({
-          platform: event.platform,
-          channelIdentifier: event.channelIdentifier,
-          eventType: event.eventType,
-          rawPayload: { error: err.message, event },
-          status: 'ERROR'
-        });
+        console.error(`❌ [WEBHOOK PROCESS ERROR] Fallo procesando evento en canal ${event.channelIdentifier}:`, err.message);
+        try {
+          await logRepository.logEvent({
+            platform: event.platform,
+            channelIdentifier: event.channelIdentifier,
+            eventType: event.eventType,
+            rawPayload: { error: err.message, event },
+            status: 'ERROR'
+          });
+        } catch (innerLogErr) {
+          // No relanzar para mantener estabilidad del worker
+        }
       }
     }
   },
@@ -55,13 +65,17 @@ export const webhookService = {
 
     if (!channel) {
       console.warn(`⚠️ [WEBHOOK] Evento recibido para un canal no registrado: ${event.channelIdentifier} (${event.platform})`);
-      await logRepository.logEvent({
-        platform: event.platform,
-        channelIdentifier: event.channelIdentifier,
-        eventType: event.eventType,
-        rawPayload,
-        status: 'CHANNEL_NOT_FOUND'
-      });
+      try {
+        await logRepository.logEvent({
+          platform: event.platform,
+          channelIdentifier: event.channelIdentifier,
+          eventType: event.eventType,
+          rawPayload,
+          status: 'CHANNEL_NOT_FOUND'
+        });
+      } catch (logErr) {
+        // Ignorar si la base de datos de logs no está disponible en este momento
+      }
       return;
     }
 
@@ -130,13 +144,40 @@ export const webhookService = {
         return;
       }
 
-      // E. Si es entrante del cliente, actualizar ventana de 24h y contador
+      // E. Si el mensaje contiene mediaId de WhatsApp, descargar de forma asíncrona
+      if (event.message.mediaId && channel.access_token) {
+        mediaService.downloadMedia({
+          mediaId: event.message.mediaId,
+          accessToken: channel.access_token
+        }).then(async (mediaResult) => {
+          if (mediaResult?.localUrl) {
+            await messageRepository.updateMediaUrl(insertedMessage.id, mediaResult.localUrl);
+            socketManager.emitMessageStatus(channel.id, insertedMessage.meta_message_id, 'media_downloaded');
+          }
+        }).catch(err => {
+          console.warn(`⚠️ [MEDIA DOWNLOAD ERROR] No se pudo descargar medio ${event.message.mediaId}:`, err.message);
+        });
+      }
+
+      // F. Si es entrante del cliente, actualizar ventana de 24h y evaluar chatbot
       if (!event.isEcho && event.message.direction === 'inbound') {
         await conversationRepository.touchCustomerInteraction(
           conversation.id,
           event.message.text,
           event.message.timestamp
         );
+
+        // Disparar evaluación y respuesta automática del chatbot si procede
+        try {
+          await botService.handleInboundMessage({
+            channel,
+            contact,
+            conversation,
+            inboundText: event.message.text
+          });
+        } catch (botErr) {
+          console.error(`❌ [BOT SERVICE ERROR] Error al procesar respuesta automática:`, botErr);
+        }
       } else if (event.isEcho) {
         await conversationRepository.updateOutboundMessage(
           conversation.id,
@@ -144,7 +185,7 @@ export const webhookService = {
         );
       }
 
-      // F. Notificar a los navegadores conectados en tiempo real vía WebSocket
+      // G. Notificar a los navegadores conectados en tiempo real vía WebSocket
       const conversationSummary = {
         id: conversation.id,
         channel_id: channel.id,
@@ -160,7 +201,7 @@ export const webhookService = {
       };
       socketManager.emitNewMessage(channel.id, insertedMessage, conversationSummary);
 
-      // G. Registrar auditoría
+      // H. Registrar auditoría
       await logRepository.logEvent({
         platform: event.platform,
         channelIdentifier: event.channelIdentifier,
