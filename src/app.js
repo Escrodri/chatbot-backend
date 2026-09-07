@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { rawBodyJsonParser, errorHandler } from './middlewares/index.js';
+import { apiRouter } from './routes/index.js';
 
 /**
  * Crea y configura la instancia de aplicación Express.
@@ -29,7 +30,10 @@ export function createApp() {
     });
   });
 
-  // 4. Manejador centralizado de errores (debe ser el último middleware montado)
+  // 4. Montar rutas de la API
+  app.use('/api', apiRouter);
+
+  // 5. Manejador centralizado de errores (debe ser el último middleware montado)
   app.use(errorHandler);
 
   return app;
