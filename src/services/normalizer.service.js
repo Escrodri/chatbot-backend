@@ -41,24 +41,41 @@ export const normalizerService = {
               let textContent = '';
               let mediaId = null;
               let mimeType = null;
+              let mediaDirectUrl = null;
 
               if (msg.type === 'text') {
                 contentType = 'text';
                 textContent = msg.text?.body || '';
-              } else if (msg.type === 'audio') {
+              } else if (msg.type === 'sticker') {
+                contentType = 'sticker';
+                mediaId = msg.sticker?.id;
+                mimeType = msg.sticker?.mime_type || 'image/webp';
+                mediaDirectUrl = msg.sticker?.url;
+                textContent = '🏷️ [Sticker]';
+              } else if (msg.type === 'audio' || msg.type === 'voice') {
                 contentType = 'audio';
-                mediaId = msg.audio?.id;
-                mimeType = msg.audio?.mime_type;
+                const audioObj = msg.audio || msg.voice || {};
+                mediaId = audioObj.id;
+                mimeType = audioObj.mime_type || 'audio/ogg';
+                mediaDirectUrl = audioObj.url;
                 textContent = '🎵 [Nota de voz / Audio]';
               } else if (msg.type === 'image') {
                 contentType = 'image';
                 mediaId = msg.image?.id;
                 mimeType = msg.image?.mime_type;
+                mediaDirectUrl = msg.image?.url;
                 textContent = msg.image?.caption || '📷 [Imagen]';
+              } else if (msg.type === 'video') {
+                contentType = 'video';
+                mediaId = msg.video?.id;
+                mimeType = msg.video?.mime_type || 'video/mp4';
+                mediaDirectUrl = msg.video?.url;
+                textContent = msg.video?.caption || '🎥 [Video]';
               } else if (msg.type === 'document') {
                 contentType = 'document';
                 mediaId = msg.document?.id;
                 mimeType = msg.document?.mime_type;
+                mediaDirectUrl = msg.document?.url;
                 textContent = msg.document?.filename ? `📄 ${msg.document.filename}` : '📄 [Documento]';
               } else if (msg.type === 'reaction') {
                 continue; // Omitir reacciones por el momento
@@ -87,7 +104,8 @@ export const normalizerService = {
                   type: contentType,
                   text: textContent,
                   mediaId,
-                  mimeType
+                  mimeType,
+                  mediaDirectUrl
                 }
               });
             }

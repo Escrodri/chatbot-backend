@@ -109,6 +109,21 @@ class SocketManager {
       botStatus
     });
   }
+
+  emitMessageSent(messageData) {
+    if (!this.io) return;
+    this.io.to('inbox_global').emit('message:sent', messageData);
+  }
+
+  emitConversationUpdated(conversationData) {
+    if (!this.io) return;
+    this.io.to('inbox_global').emit('conversation:updated', conversationData);
+  }
+
+  emitMessageStatusUpdated(data) {
+    if (!this.io) return;
+    this.io.to('inbox_global').emit('message:status_updated', data);
+  }
 }
 
 export const socketManager = new SocketManager();

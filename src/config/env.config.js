@@ -72,9 +72,10 @@ export const envConfig = Object.freeze({
   },
 
   meta: {
+    appId: (process.env.META_APP_ID || '2381150255623992').trim(),
     appSecret: (process.env.META_APP_SECRET || '').trim(),
     verifyToken: (process.env.META_VERIFY_TOKEN || '').trim(),
-    apiVersion: (process.env.META_API_VERSION || 'v21.0').trim(),
+    apiVersion: (process.env.META_API_VERSION || 'v25.0').trim(),
   }
 });
 

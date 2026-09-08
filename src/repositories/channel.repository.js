@@ -94,6 +94,63 @@ export const channelRepository = {
   },
 
   /**
+   * Actualiza los datos de un canal (nombre, color, estado, y opcionalmente nuevo token).
+   * 
+   * @param {number} id 
+   * @param {{ name?: string, colorTag?: string, status?: 'active'|'error'|'paused', accessToken?: string }} data 
+   * @returns {Promise<object|null>}
+   */
+  async update(id, { name, colorTag, status, accessToken } = {}) {
+    const fields = [];
+    const values = [];
+    let idx = 1;
+
+    if (name !== undefined) {
+      fields.push(`name = $${idx++}`);
+      values.push(name.trim());
+    }
+    if (colorTag !== undefined) {
+      fields.push(`color_tag = $${idx++}`);
+      values.push(colorTag.trim());
+    }
+    if (status !== undefined) {
+      fields.push(`status = $${idx++}`);
+      values.push(status);
+    }
+    if (accessToken) {
+      const encryptedToken = encryptSecret(accessToken);
+      fields.push(`access_token_encrypted = $${idx++}`);
+      values.push(encryptedToken.cipherText);
+      fields.push(`token_iv = $${idx++}`);
+      values.push(encryptedToken.iv);
+      fields.push(`token_tag = $${idx++}`);
+      values.push(encryptedToken.tag);
+    }
+
+    if (fields.length === 0) {
+      const { rows } = await query(
+        `SELECT id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at 
+         FROM channels WHERE id = $1`,
+        [id]
+      );
+      return rows[0] || null;
+    }
+
+    fields.push(`updated_at = CURRENT_TIMESTAMP`);
+    values.push(id);
+
+    const { rows } = await query(
+      `UPDATE channels 
+       SET ${fields.join(', ')} 
+       WHERE id = $${idx}
+       RETURNING id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at`,
+      values
+    );
+
+    return rows[0] || null;
+  },
+
+  /**
    * Actualiza el estado de un canal (active, error, paused) y registra el mensaje de error si aplica.
    * 
    * @param {number} id
@@ -128,20 +185,25 @@ export const channelRepository = {
 
     // 1. Descifrar Access Token
     if (channel.access_token_encrypted && channel.token_iv && channel.token_tag) {
-      channel.accessToken = decryptSecret(
+      const decryptedToken = decryptSecret(
         channel.access_token_encrypted,
         channel.token_iv,
         channel.token_tag
       );
+      channel.accessToken = decryptedToken;
+      channel.access_token = decryptedToken;
     }
 
     // 2. Descifrar App Secret si existe
     if (channel.app_secret_encrypted) {
       try {
         const secObj = JSON.parse(channel.app_secret_encrypted);
-        channel.appSecret = decryptSecret(secObj.cipherText, secObj.iv, secObj.tag);
+        const decryptedSecret = decryptSecret(secObj.cipherText, secObj.iv, secObj.tag);
+        channel.appSecret = decryptedSecret;
+        channel.app_secret = decryptedSecret;
       } catch {
         channel.appSecret = null;
+        channel.app_secret = null;
       }
     }
 

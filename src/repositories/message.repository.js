@@ -140,6 +140,28 @@ export const messageRepository = {
        WHERE meta_message_id = $3`,
       [status, errorDetailsJson, metaMessageId]
     );
+  },
+
+  /**
+   * Actualiza el estado de un mensaje por su ID primario.
+   * 
+   * @param {number} id
+   * @param {'pending'|'sent'|'delivered'|'read'|'failed'} status
+   * @param {string|null} metaMessageId
+   * @returns {Promise<void>}
+   */
+  async updateStatus(id, status, metaMessageId = null) {
+    if (metaMessageId) {
+      await query(
+        `UPDATE messages SET status = $1, meta_message_id = $2 WHERE id = $3`,
+        [status, metaMessageId, id]
+      );
+    } else {
+      await query(
+        `UPDATE messages SET status = $1 WHERE id = $2`,
+        [status, id]
+      );
+    }
   }
 };
 

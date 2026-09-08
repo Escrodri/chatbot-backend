@@ -118,7 +118,26 @@ export const webhookService = {
         console.log(`🤖 [HANDOVER] Bot pausado automáticamente para conversación #${conversation.id} por eco de operador.`);
       }
 
-      // D. Insertar el mensaje con deduplicación estricta
+      // D. Descargar archivo multimedia si el mensaje contiene mediaId o mediaDirectUrl
+      let localMediaUrl = event.message.mediaUrl || null;
+      const token = channel.accessToken || channel.access_token;
+      if ((event.message.mediaId || event.message.mediaDirectUrl) && token) {
+        try {
+          const mediaResult = await mediaService.downloadMedia({
+            mediaId: event.message.mediaId,
+            accessToken: token,
+            directUrl: event.message.mediaDirectUrl,
+            mimeType: event.message.mimeType
+          });
+          if (mediaResult?.localUrl) {
+            localMediaUrl = mediaResult.localUrl;
+          }
+        } catch (mediaErr) {
+          console.warn(`⚠️ [MEDIA DOWNLOAD ERROR] No se pudo descargar medio ${event.message.mediaId}:`, mediaErr.message);
+        }
+      }
+
+      // E. Insertar el mensaje con deduplicación estricta y mediaUrl resuelta
       const insertedMessage = await messageRepository.insertMessage({
         conversationId: conversation.id,
         channelId: channel.id,
@@ -127,7 +146,7 @@ export const webhookService = {
         senderType: event.message.senderType,
         contentType: event.message.type,
         text: event.message.text,
-        mediaUrl: event.message.mediaUrl || null,
+        mediaUrl: localMediaUrl,
         status: 'delivered',
         timestamp: event.message.timestamp
       });
@@ -142,21 +161,6 @@ export const webhookService = {
           status: 'DUPLICATE'
         });
         return;
-      }
-
-      // E. Si el mensaje contiene mediaId de WhatsApp, descargar de forma asíncrona
-      if (event.message.mediaId && channel.access_token) {
-        mediaService.downloadMedia({
-          mediaId: event.message.mediaId,
-          accessToken: channel.access_token
-        }).then(async (mediaResult) => {
-          if (mediaResult?.localUrl) {
-            await messageRepository.updateMediaUrl(insertedMessage.id, mediaResult.localUrl);
-            socketManager.emitMessageStatus(channel.id, insertedMessage.meta_message_id, 'media_downloaded');
-          }
-        }).catch(err => {
-          console.warn(`⚠️ [MEDIA DOWNLOAD ERROR] No se pudo descargar medio ${event.message.mediaId}:`, err.message);
-        });
       }
 
       // F. Si es entrante del cliente, actualizar ventana de 24h y evaluar chatbot

@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS messages (
     direction VARCHAR(10) NOT NULL CHECK(direction IN ('inbound', 'outbound')),
     sender_type VARCHAR(20) DEFAULT 'customer' CHECK(sender_type IN ('customer', 'bot', 'agent')),
     sender_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    content_type VARCHAR(20) DEFAULT 'text' CHECK(content_type IN ('text', 'image', 'audio', 'document', 'system')),
+    content_type VARCHAR(20) DEFAULT 'text' CHECK(content_type IN ('text', 'image', 'sticker', 'audio', 'video', 'document', 'system')),
     text TEXT NOT NULL,
     media_url TEXT,
     status VARCHAR(20) DEFAULT 'sent' CHECK(status IN ('pending', 'sent', 'delivered', 'read', 'failed')),
