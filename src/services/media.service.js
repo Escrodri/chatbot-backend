@@ -51,7 +51,7 @@ export const mediaService = {
   async downloadMedia({ mediaId, accessToken, directUrl = null, mimeType: initialMime = null }) {
     this.ensureUploadsDir();
 
-    const apiVersion = config.meta.apiVersion || 'v25.0';
+    const apiVersion = config.meta.apiVersion || 'v26.0';
     let downloadUrl = directUrl;
     let mimeType = initialMime || 'application/octet-stream';
 

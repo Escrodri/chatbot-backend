@@ -25,7 +25,7 @@ export const graphApiService = {
    * @returns {Promise<{ metaMessageId: string }>}
    */
   async sendMessage({ channel, recipientId, text, lastCustomerInteraction = null, isHumanAgentTag = false, mediaUrl = null }) {
-    const apiVersion = config.meta.apiVersion || 'v25.0';
+    const apiVersion = config.meta.apiVersion || 'v26.0';
     const accessToken = channel.accessToken;
 
     if (!accessToken) {

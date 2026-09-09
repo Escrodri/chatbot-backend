@@ -138,7 +138,7 @@ export const settingsController = {
 
       const cleanToken = userToken.trim();
       let effectiveToken = cleanToken;
-      const apiVersion = envConfig.meta.apiVersion || 'v25.0';
+      const apiVersion = envConfig.meta.apiVersion || 'v26.0';
 
       // Canje por token de larga duración (60 días / permanente para páginas) si disponemos de App ID y App Secret
       if (envConfig.meta.appId && envConfig.meta.appSecret && !cleanToken.startsWith('EAAB_test')) {
@@ -249,7 +249,7 @@ export const settingsController = {
 
         // A. Suscribir la página a los eventos de Webhook de la aplicación
         try {
-          const apiVersion = envConfig.meta.apiVersion || 'v25.0';
+          const apiVersion = envConfig.meta.apiVersion || 'v26.0';
           const subRes = await fetch(
             `https://graph.facebook.com/${apiVersion}/${p.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads&access_token=${p.accessToken}`,
             { method: 'POST' }
