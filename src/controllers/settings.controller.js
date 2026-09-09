@@ -144,6 +144,8 @@ export const settingsController = {
 
       if (channel.platform === 'whatsapp') {
         verifyUrl = `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=verified_name,code_verification_status,display_phone_number`;
+      } else if (channel.platform === 'instagram') {
+        verifyUrl = `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=id,username,name`;
       } else {
         verifyUrl = `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=id,name,category`;
       }
@@ -168,11 +170,11 @@ export const settingsController = {
       // Limpiar error y dejar en activo
       await channelRepository.updateStatus(id, 'active', null);
 
-      // Si es Facebook, asegurar suscripción de webhook a la página
+      // Si es Facebook o Instagram, asegurar suscripción de webhook con soporte para standby
       if (channel.platform === 'facebook') {
         try {
           await fetch(
-            `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads&access_token=${channel.access_token}`,
+            `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${channel.access_token}`,
             { method: 'POST' }
           );
         } catch (subErr) {
@@ -414,7 +416,7 @@ export const settingsController = {
         try {
           const apiVersion = envConfig.meta.apiVersion || 'v26.0';
           const subRes = await fetch(
-            `https://graph.facebook.com/${apiVersion}/${p.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads&access_token=${p.accessToken}`,
+            `https://graph.facebook.com/${apiVersion}/${p.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${p.accessToken}`,
             { method: 'POST' }
           );
           const subData = await subRes.json();

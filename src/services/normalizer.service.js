@@ -140,7 +140,8 @@ export const normalizerService = {
 
       for (const entry of entries) {
         const pageId = entry.id; // ID de la Fan Page o Cuenta de Instagram
-        const messagingList = entry.messaging || [];
+        // Soporta tanto canal principal (messaging) como canal secundario (standby) de Conversation Routing
+        const messagingList = [...(entry.messaging || []), ...(entry.standby || [])];
 
         for (const item of messagingList) {
           // A. Mensajes entrantes o ecos
@@ -150,9 +151,10 @@ export const normalizerService = {
             const senderId = item.sender?.id;
             const recipientId = item.recipient?.id;
 
-            // Si es eco, el cliente es recipient.id y el canal es sender.id
+            // Si es eco, el cliente es recipient.id y el canal es sender.id.
+            // Para mensajes entrantes, recipientId identifica con precisión el canal destino.
             const customerId = isEcho ? recipientId : senderId;
-            const channelId = isEcho ? senderId : (pageId || recipientId);
+            const channelId = isEcho ? senderId : (recipientId || pageId);
 
             let contentType = 'text';
             let textContent = msg.text || '';
