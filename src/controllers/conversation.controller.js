@@ -182,6 +182,7 @@ export const conversationController = {
         contentType,
         text: messageText,
         mediaUrl,
+        mediaMime: savedMedia ? (savedMedia.mimeType || (contentType === 'image' ? 'image/jpeg' : null)) : null,
         status: 'pending'
       });
 

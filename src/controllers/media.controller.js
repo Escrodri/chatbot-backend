@@ -35,6 +35,7 @@ export const mediaController = {
       // El navegador pide estos archivos desde otro dominio con una etiqueta
       // <img>, así que hay que permitir explícitamente el uso cruzado.
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.setHeader('Access-Control-Allow-Origin', '*');
 
       const messageId = parseInt(req.params.messageId, 10);
       if (isNaN(messageId)) {
@@ -66,7 +67,19 @@ export const mediaController = {
         const rutaCache = path.join(UPLOADS_DIR, nombreCache);
         // path.basename evita que un nombre malicioso escape del directorio.
         if (rutaCache.startsWith(UPLOADS_DIR) && fs.existsSync(rutaCache)) {
-          if (mensaje.media_mime) res.setHeader('Content-Type', mensaje.media_mime);
+          let mime = mensaje.media_mime;
+          if (!mime) {
+            const ext = path.extname(nombreCache).toLowerCase();
+            if (['.jpg', '.jpeg', '.jfif'].includes(ext)) mime = 'image/jpeg';
+            else if (ext === '.png') mime = 'image/png';
+            else if (ext === '.webp') mime = 'image/webp';
+            else if (ext === '.gif') mime = 'image/gif';
+            else if (ext === '.mp3') mime = 'audio/mpeg';
+            else if (['.ogg', '.opus'].includes(ext)) mime = 'audio/ogg';
+            else if (ext === '.mp4') mime = 'video/mp4';
+            else if (ext === '.pdf') mime = 'application/pdf';
+          }
+          if (mime) res.setHeader('Content-Type', mime);
           res.setHeader('Cache-Control', 'private, max-age=86400');
           return res.sendFile(rutaCache);
         }

@@ -71,6 +71,9 @@ export function createApp() {
   app.use('/uploads', (req, res, next) => {
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    if (req.path && req.path.toLowerCase().endsWith('.jfif')) {
+      res.setHeader('Content-Type', 'image/jpeg');
+    }
     next();
   }, express.static(path.resolve(__dirname, '../uploads')));
 

@@ -16,6 +16,10 @@ export function requireAuth(req, res, next) {
   else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
     token = req.headers.authorization.slice(7).trim();
   }
+  // 3. Intentar leer de query param (?token=) para elementos <img>, <audio>, <video> y descargas directas
+  else if (req.query && req.query.token) {
+    token = req.query.token;
+  }
 
   if (!token) {
     return res.status(401).json({
