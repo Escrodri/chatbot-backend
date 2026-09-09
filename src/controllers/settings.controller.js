@@ -140,37 +140,88 @@ export const settingsController = {
       }
 
       const apiVersion = envConfig.meta.apiVersion || 'v26.0';
-      let verifyUrl = '';
+      let metaData = null;
+      let lastError = null;
 
       if (channel.platform === 'whatsapp') {
-        verifyUrl = `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=verified_name,code_verification_status,display_phone_number`;
+        // WhatsApp Cloud API: verificar el Phone Number ID
+        const testUrls = [
+          `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=verified_name,code_verification_status,display_phone_number`,
+          `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=id,display_phone_number`
+        ];
+        for (const url of testUrls) {
+          try {
+            const r = await fetch(url, { headers: { 'Authorization': `Bearer ${channel.access_token}` } });
+            const d = await r.json();
+            if (r.ok && !d.error) {
+              metaData = d;
+              break;
+            } else {
+              lastError = d.error || { message: `HTTP ${r.status}` };
+            }
+          } catch (e) {
+            lastError = { message: e.message };
+          }
+        }
       } else if (channel.platform === 'instagram') {
-        verifyUrl = `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=id,username,name`;
+        // Instagram Business Account: consultar id y username
+        const testUrls = [
+          `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=id,username,name`,
+          `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=id,username`
+        ];
+        for (const url of testUrls) {
+          try {
+            const r = await fetch(url, { headers: { 'Authorization': `Bearer ${channel.access_token}` } });
+            const d = await r.json();
+            if (r.ok && !d.error) {
+              metaData = d;
+              break;
+            } else {
+              lastError = d.error || { message: `HTTP ${r.status}` };
+            }
+          } catch (e) {
+            lastError = { message: e.message };
+          }
+        }
       } else {
-        verifyUrl = `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=id,name,category`;
+        // Facebook Fan Page:
+        // IMPORTANTE: NUNCA pedir 'category' porque requiere el permiso avanzado 'pages_read_engagement'
+        // o la función 'Page Public Metadata Access' que genera error (#100).
+        // Con el Page Access Token se consulta /me?fields=id,name o /{page_id}?fields=id,name.
+        const testUrls = [
+          `https://graph.facebook.com/${apiVersion}/me?fields=id,name`,
+          `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=id,name`
+        ];
+        for (const url of testUrls) {
+          try {
+            const r = await fetch(url, { headers: { 'Authorization': `Bearer ${channel.access_token}` } });
+            const d = await r.json();
+            if (r.ok && !d.error) {
+              metaData = d;
+              break;
+            } else {
+              lastError = d.error || { message: `HTTP ${r.status}` };
+            }
+          } catch (e) {
+            lastError = { message: e.message };
+          }
+        }
       }
 
-      const metaRes = await fetch(verifyUrl, {
-        headers: {
-          'Authorization': `Bearer ${channel.access_token}`
-        }
-      });
-      const metaData = await metaRes.json();
-
-      if (!metaRes.ok || metaData.error) {
-        const errMsg = metaData.error?.message || `Error ${metaRes.status} al validar con Meta`;
+      if (!metaData) {
+        const errMsg = lastError?.message || 'Error al validar canal con Meta Graph API';
         await channelRepository.updateStatus(id, 'error', errMsg);
         return res.status(400).json({
           success: false,
           error: errMsg,
-          metaError: metaData.error
+          metaError: lastError
         });
       }
 
       // Limpiar error y dejar en activo
       await channelRepository.updateStatus(id, 'active', null);
 
-      // Si es Facebook o Instagram, asegurar suscripción de webhook con soporte para standby
+      // Si es Facebook, asegurar suscripción de webhook con soporte para standby
       if (channel.platform === 'facebook') {
         try {
           await fetch(
