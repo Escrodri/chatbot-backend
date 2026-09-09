@@ -118,8 +118,72 @@ export const settingsController = {
    */
   async getMetaAppInfo(req, res) {
     return res.json({
-      appId: envConfig.meta.appId || '2381150255623992'
+      appId: envConfig.meta.appId || '',
+      // ID de la configuración de "Inicio de sesión con Facebook para empresas".
+      // Sin esto el botón de conectar no sabe qué permisos pedir.
+      loginConfigId: envConfig.meta.loginConfigId || '',
+      apiVersion: envConfig.meta.apiVersion || 'v26.0'
     });
+  },
+
+  /**
+   * Canjea el 'code' que devuelve el Inicio de sesión con Facebook para empresas
+   * por un token de usuario, y escanea las páginas con él.
+   *
+   * El canje se hace en el servidor porque necesita el App Secret, que nunca
+   * debe viajar al navegador.
+   *
+   * POST /api/settings/channels/facebook-exchange-code   body: { code }
+   */
+  async exchangeFacebookCode(req, res) {
+    try {
+      const { code } = req.body;
+
+      if (!code || typeof code !== 'string') {
+        return res.status(400).json({ error: 'Falta el código de autorización devuelto por Meta.' });
+      }
+
+      if (!envConfig.meta.appId || !envConfig.meta.appSecret) {
+        return res.status(500).json({
+          error: 'El servidor no tiene configurados META_APP_ID y META_APP_SECRET.'
+        });
+      }
+
+      const apiVersion = envConfig.meta.apiVersion || 'v26.0';
+
+      // En el flujo del SDK de JavaScript el redirect_uri va vacío.
+      const params = new URLSearchParams({
+        client_id: envConfig.meta.appId,
+        client_secret: envConfig.meta.appSecret,
+        redirect_uri: '',
+        code: code.trim()
+      });
+
+      const tokenRes = await fetch(
+        `https://graph.facebook.com/${apiVersion}/oauth/access_token?${params.toString()}`
+      );
+      const tokenData = await tokenRes.json();
+
+      if (!tokenRes.ok || tokenData.error || !tokenData.access_token) {
+        const detalle = tokenData.error?.message || `HTTP ${tokenRes.status}`;
+        console.error('❌ [META CODE EXCHANGE] Fallo al canjear el código:', tokenData.error || tokenData);
+        return res.status(400).json({
+          error: `Meta rechazó el canje del código: ${detalle}`,
+          metaError: tokenData.error
+        });
+      }
+
+      // Con el token en mano, el escaneo es exactamente el mismo de siempre.
+      const resultado = await settingsController._scanPagesConToken(tokenData.access_token, apiVersion);
+
+      if (resultado.error) {
+        return res.status(400).json(resultado);
+      }
+
+      return res.json(resultado);
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al canjear el código de Meta: ' + error.message });
+    }
   },
 
   /**
@@ -136,98 +200,118 @@ export const settingsController = {
         });
       }
 
-      const cleanToken = userToken.trim();
-      let effectiveToken = cleanToken;
       const apiVersion = envConfig.meta.apiVersion || 'v26.0';
+      const resultado = await settingsController._scanPagesConToken(userToken.trim(), apiVersion);
 
-      // Canje por token de larga duración (60 días / permanente para páginas) si disponemos de App ID y App Secret
-      if (envConfig.meta.appId && envConfig.meta.appSecret && !cleanToken.startsWith('EAAB_test')) {
-        try {
-          const exchangeUrl = `https://graph.facebook.com/${apiVersion}/oauth/access_token?grant_type=fb_exchange_token&client_id=${envConfig.meta.appId}&client_secret=${envConfig.meta.appSecret}&fb_exchange_token=${cleanToken}`;
-          const exRes = await fetch(exchangeUrl);
-          const exData = await exRes.json();
-          if (exData.access_token) {
-            effectiveToken = exData.access_token;
-            console.log('⚡ [TOKEN EXCHANGE] Token canjeado por token de larga duración exitosamente.');
-          }
-        } catch (exErr) {
-          console.warn('⚠️ [TOKEN EXCHANGE] Canje de token omitido:', exErr.message);
-        }
+      if (resultado.error) {
+        return res.status(400).json(resultado);
       }
 
-      // 1. Validar permisos concedidos al token
-      let grantedPermissions = [];
-      try {
-        const permRes = await fetch(`https://graph.facebook.com/${apiVersion}/me/permissions?access_token=${effectiveToken}`);
-        if (permRes.ok) {
-          const permData = await permRes.json();
-          grantedPermissions = (permData.data || [])
-            .filter(p => p.status === 'granted')
-            .map(p => p.permission);
-        }
-      } catch (permErr) {
-        console.warn('⚠️ [SCAN PAGES] No se pudieron verificar permisos previos:', permErr.message);
-      }
-
-      // 2. Consultar Fan Pages del perfil y cuentas de Instagram vinculadas
-      const accountsRes = await fetch(
-        `https://graph.facebook.com/${apiVersion}/me/accounts?fields=id,name,category,access_token,instagram_business_account{id,username,name}&access_token=${effectiveToken}`
-      );
-
-      const accountsData = await accountsRes.json();
-
-      if (!accountsRes.ok || accountsData.error) {
-        const errorMsg = accountsData.error?.message || 'Error al comunicarse con Meta Graph API';
-        return res.status(400).json({
-          error: `Meta Graph API error: ${errorMsg}`,
-          metaError: accountsData.error
-        });
-      }
-
-      const rawPages = accountsData.data || [];
-
-      // 3. Cruzar con canales existentes en la base de datos
-      const scannedPages = await Promise.all(
-        rawPages.map(async (page) => {
-          const existingFb = await channelRepository.findByIdentifier(page.id);
-          let existingIg = null;
-
-          if (page.instagram_business_account?.id) {
-            existingIg = await channelRepository.findByIdentifier(page.instagram_business_account.id);
-          }
-
-          return {
-            id: page.id,
-            name: page.name,
-            category: page.category || 'Página de Facebook',
-            accessToken: page.access_token,
-            alreadyConnected: Boolean(existingFb),
-            existingChannelId: existingFb?.id || null,
-            instagram: page.instagram_business_account ? {
-              id: page.instagram_business_account.id,
-              username: page.instagram_business_account.username,
-              name: page.instagram_business_account.name || null,
-              alreadyConnected: Boolean(existingIg),
-              existingChannelId: existingIg?.id || null
-            } : null
-          };
-        })
-      );
-
-      const recommended = ['pages_show_list', 'pages_messaging', 'pages_manage_metadata'];
-      const missingRecommended = recommended.filter(p => !grantedPermissions.includes(p));
-
-      return res.json({
-        success: true,
-        pages: scannedPages,
-        permissions: grantedPermissions,
-        missingRecommended,
-        count: scannedPages.length
-      });
+      return res.json(resultado);
     } catch (error) {
       return res.status(500).json({ error: 'Error al escanear páginas de Facebook: ' + error.message });
     }
   },
+
+  /**
+   * Lógica compartida de escaneo: recibe un token de usuario ya obtenido (sea
+   * pegado a mano o salido del canje del código) y devuelve las páginas del
+   * perfil cruzadas con los canales ya registrados.
+   *
+   * @private
+   * @param {string} token Token de acceso de usuario de Meta
+   * @param {string} apiVersion
+   * @returns {Promise<object>} { success, pages, permissions, missingRecommended, count } o { error }
+   */
+  async _scanPagesConToken(token, apiVersion) {
+    let effectiveToken = token;
+
+    // 1. Canjear por un token de larga duración si tenemos App ID y App Secret.
+    //    Los tokens de página que salgan de este no expiran.
+    if (envConfig.meta.appId && envConfig.meta.appSecret && !token.startsWith('EAAB_test')) {
+      try {
+        const exchangeUrl = `https://graph.facebook.com/${apiVersion}/oauth/access_token?grant_type=fb_exchange_token&client_id=${envConfig.meta.appId}&client_secret=${envConfig.meta.appSecret}&fb_exchange_token=${token}`;
+        const exRes = await fetch(exchangeUrl);
+        const exData = await exRes.json();
+        if (exData.access_token) {
+          effectiveToken = exData.access_token;
+          console.log('⚡ [TOKEN EXCHANGE] Token canjeado por uno de larga duración.');
+        }
+      } catch (exErr) {
+        console.warn('⚠️ [TOKEN EXCHANGE] Canje omitido:', exErr.message);
+      }
+    }
+
+    // 2. Consultar qué permisos concedió realmente el usuario
+    let grantedPermissions = [];
+    try {
+      const permRes = await fetch(`https://graph.facebook.com/${apiVersion}/me/permissions?access_token=${effectiveToken}`);
+      if (permRes.ok) {
+        const permData = await permRes.json();
+        grantedPermissions = (permData.data || [])
+          .filter(p => p.status === 'granted')
+          .map(p => p.permission);
+      }
+    } catch (permErr) {
+      console.warn('⚠️ [SCAN PAGES] No se pudieron verificar los permisos:', permErr.message);
+    }
+
+    // 3. Traer las páginas del perfil y sus cuentas de Instagram vinculadas
+    const accountsRes = await fetch(
+      `https://graph.facebook.com/${apiVersion}/me/accounts?fields=id,name,category,access_token,instagram_business_account{id,username,name}&access_token=${effectiveToken}`
+    );
+    const accountsData = await accountsRes.json();
+
+    if (!accountsRes.ok || accountsData.error) {
+      const errorMsg = accountsData.error?.message || 'Error al comunicarse con Meta Graph API';
+      return {
+        error: `Meta Graph API error: ${errorMsg}`,
+        metaError: accountsData.error
+      };
+    }
+
+    const rawPages = accountsData.data || [];
+
+    // 4. Cruzar con los canales ya existentes para no duplicar
+    const scannedPages = await Promise.all(
+      rawPages.map(async (page) => {
+        const existingFb = await channelRepository.findByIdentifier(page.id);
+        let existingIg = null;
+
+        if (page.instagram_business_account?.id) {
+          existingIg = await channelRepository.findByIdentifier(page.instagram_business_account.id);
+        }
+
+        return {
+          id: page.id,
+          name: page.name,
+          category: page.category || 'Página de Facebook',
+          accessToken: page.access_token,
+          alreadyConnected: Boolean(existingFb),
+          existingChannelId: existingFb?.id || null,
+          instagram: page.instagram_business_account ? {
+            id: page.instagram_business_account.id,
+            username: page.instagram_business_account.username,
+            name: page.instagram_business_account.name || null,
+            alreadyConnected: Boolean(existingIg),
+            existingChannelId: existingIg?.id || null
+          } : null
+        };
+      })
+    );
+
+    const recommended = ['pages_show_list', 'pages_messaging', 'pages_manage_metadata'];
+    const missingRecommended = recommended.filter(p => !grantedPermissions.includes(p));
+
+    return {
+      success: true,
+      pages: scannedPages,
+      permissions: grantedPermissions,
+      missingRecommended,
+      count: scannedPages.length
+    };
+  },
+
 
   /**
    * Conecta y suscribe automáticamente una o varias Fan Pages seleccionadas como canales del CRM.
