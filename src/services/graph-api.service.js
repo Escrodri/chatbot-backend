@@ -148,6 +148,17 @@ export const graphApiService = {
       }
 
       const metaMessageId = extractIdFn(data) || `meta_${Date.now()}`;
+
+      // Si el canal tenía un error previo, limpiarlo porque el envío fue exitoso
+      if (channel?.id) {
+        try {
+          await channelRepository.updateStatus(channel.id, 'active', null);
+          socketManager.emitChannelStatus(channel.id, 'active', null);
+        } catch (clearErr) {
+          // No bloqueante
+        }
+      }
+
       return { metaMessageId, rawResponse: data };
     } catch (err) {
       console.error(`💥 [GRAPH API NETWORK FAILURE] ${url}:`, err.message);

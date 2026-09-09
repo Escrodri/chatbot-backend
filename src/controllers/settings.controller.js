@@ -112,6 +112,73 @@ export const settingsController = {
   },
 
   /**
+   * Prueba la validez del token y conectividad con Meta Graph API en vivo.
+   * Si es exitoso, limpia error_message y restablece el canal a 'active'.
+   */
+  async testChannel(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: 'ID de canal inválido' });
+      }
+
+      const channel = await channelRepository.findById(id);
+      if (!channel) {
+        return res.status(404).json({ error: 'Canal no encontrado' });
+      }
+
+      const apiVersion = envConfig.meta.apiVersion || 'v26.0';
+      let verifyUrl = '';
+
+      if (channel.platform === 'whatsapp') {
+        verifyUrl = `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=verified_name,code_verification_status,display_phone_number`;
+      } else {
+        verifyUrl = `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}?fields=id,name,category`;
+      }
+
+      const metaRes = await fetch(verifyUrl, {
+        headers: {
+          'Authorization': `Bearer ${channel.access_token}`
+        }
+      });
+      const metaData = await metaRes.json();
+
+      if (!metaRes.ok || metaData.error) {
+        const errMsg = metaData.error?.message || `Error ${metaRes.status} al validar con Meta`;
+        await channelRepository.updateStatus(id, 'error', errMsg);
+        return res.status(400).json({
+          success: false,
+          error: errMsg,
+          metaError: metaData.error
+        });
+      }
+
+      // Limpiar error y dejar en activo
+      await channelRepository.updateStatus(id, 'active', null);
+
+      // Si es Facebook, asegurar suscripción de webhook a la página
+      if (channel.platform === 'facebook') {
+        try {
+          await fetch(
+            `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads&access_token=${channel.access_token}`,
+            { method: 'POST' }
+          );
+        } catch (subErr) {
+          console.warn('Advertencia al suscribir página en test:', subErr.message);
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: 'Conexión con Meta validada exitosamente',
+        data: metaData
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al probar el canal: ' + error.message });
+    }
+  },
+
+  /**
    * Escanea las Fan Pages del perfil de Facebook del usuario a través de Meta Graph API v21.0.
   /**
    * Obtiene la configuración pública de la App de Meta (App ID) para OAuth.
