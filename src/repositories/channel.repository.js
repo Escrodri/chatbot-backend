@@ -76,6 +76,25 @@ export const channelRepository = {
   },
 
   /**
+   * Guarda el identificador de la cuenta a la que pertenece el canal.
+   *
+   * En WhatsApp es el de la cuenta de WhatsApp Business, que no conocemos al
+   * conectar el canal pero viene en cada webhook. Hace falta para informarle a
+   * Meta las ventas que salen de una conversación de WhatsApp.
+   *
+   * @param {number} channelId
+   * @param {string} accountId
+   * @returns {Promise<void>}
+   */
+  async saveAccountId(channelId, accountId) {
+    if (!accountId) return;
+    await query(
+      `UPDATE channels SET waba_id = $1 WHERE id = $2 AND (waba_id IS NULL OR waba_id <> $1)`,
+      [String(accountId), channelId]
+    );
+  },
+
+  /**
    * Busca un canal por su ID interno y descifra sus secretos en memoria.
    * 
    * @param {number} id

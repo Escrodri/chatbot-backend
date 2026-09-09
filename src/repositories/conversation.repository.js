@@ -43,8 +43,9 @@ export const conversationRepository = {
       `SELECT 
          c.id, c.channel_id, c.contact_id, c.last_message_text, c.last_message_time,
          c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id, c.created_at,
+         c.ctwa_clid, c.source_ad_id, c.source_type, c.source_url,
          ct.name as contact_name, ct.phone_or_username as contact_phone, ct.avatar_url as contact_avatar, ct.platform_user_id,
-         ch.platform, ch.name as channel_name, ch.color_tag as channel_color, ch.channel_identifier
+         ch.platform, ch.name as channel_name, ch.color_tag as channel_color, ch.channel_identifier, ch.waba_id
        FROM conversations c
        INNER JOIN contacts ct ON c.contact_id = ct.id
        INNER JOIN channels ch ON c.channel_id = ch.id
@@ -53,6 +54,32 @@ export const conversationRepository = {
     );
 
     return rows[0] || null;
+  },
+
+  /**
+   * Guarda de dónde vino la conversación cuando arrancó desde un anuncio.
+   *
+   * Meta manda el identificador del clic una sola vez, en el webhook del primer
+   * mensaje. Se guarda solo si todavía no había uno: si la persona vuelve a
+   * escribir más adelante sin pasar por el anuncio, no queremos borrar la
+   * atribución original.
+   *
+   * @param {number} conversationId
+   * @param {{ ctwaClid?: string|null, adId?: string|null, sourceType?: string|null, sourceUrl?: string|null }} datos
+   * @returns {Promise<void>}
+   */
+  async saveAttribution(conversationId, { ctwaClid = null, adId = null, sourceType = null, sourceUrl = null } = {}) {
+    if (!ctwaClid && !adId) return;
+
+    await query(
+      `UPDATE conversations
+       SET ctwa_clid = COALESCE(ctwa_clid, $1),
+           source_ad_id = COALESCE(source_ad_id, $2),
+           source_type = COALESCE(source_type, $3),
+           source_url = COALESCE(source_url, $4)
+       WHERE id = $5`,
+      [ctwaClid, adId, sourceType, sourceUrl, conversationId]
+    );
   },
 
   /**
@@ -165,6 +192,7 @@ export const conversationRepository = {
       SELECT 
         c.id, c.channel_id, c.contact_id, c.last_message_text, c.last_message_time,
         c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id,
+        c.source_ad_id,
         ct.name as contact_name, ct.phone_or_username as contact_phone, ct.avatar_url as contact_avatar,
         ch.platform, ch.name as channel_name, ch.color_tag as channel_color, ch.channel_identifier
       FROM conversations c

@@ -97,6 +97,31 @@ export const webhookService = {
       return;
     }
 
+    // 2.5. Referido suelto: la persona volvió desde un anuncio pero todavía no
+    // escribió nada. Solo se guarda de dónde vino; no hay mensaje que registrar.
+    if (event.eventType === 'referral') {
+      try {
+        const contacto = await contactRepository.findOrCreate({
+          channelId: channel.id,
+          platform: event.platform,
+          platformUserId: event.sender.id,
+          name: event.sender.name,
+          nameIsPlaceholder: true
+        });
+        const conversacion = await conversationRepository.findOrCreateByContact(channel.id, contacto.id);
+        await conversationRepository.saveAttribution(conversacion.id, event.attribution || {});
+        if (event.accountId) await channelRepository.saveAccountId(channel.id, event.accountId);
+
+        console.log(
+          `🎯 [ATRIBUCIÓN] Conversación #${conversacion.id} volvió desde el anuncio ` +
+          `${event.attribution?.adId || '(sin id)'} (${event.platform}).`
+        );
+      } catch (refErr) {
+        console.warn('⚠️ [ATRIBUCIÓN] No se pudo guardar el referido:', refErr.message);
+      }
+      return;
+    }
+
     // 3. Manejar mensajes entrantes o ecos (message / echo)
     if (event.eventType === 'message' || event.eventType === 'echo') {
       let contactName = event.sender.name || `Contacto ${event.sender.id.slice(-4)}`;
@@ -139,6 +164,34 @@ export const webhookService = {
 
       // B. Buscar o crear la conversación
       const conversation = await conversationRepository.findOrCreateByContact(channel.id, contact.id);
+
+      // B.2. Guardar de dónde vino, si llegó desde un anuncio. Meta manda el
+      // identificador del clic una sola vez, en este webhook: si no se guarda
+      // ahora, la venta no se va a poder atribuir al anuncio nunca más.
+      if (event.attribution) {
+        try {
+          await conversationRepository.saveAttribution(conversation.id, event.attribution);
+          if (event.attribution.ctwaClid || event.attribution.adId) {
+            console.log(
+              `🎯 [ATRIBUCIÓN] Conversación #${conversation.id} viene del anuncio ` +
+              `${event.attribution.adId || '(sin id)'} (${event.platform}).`
+            );
+          }
+        } catch (attrErr) {
+          console.warn('⚠️ [ATRIBUCIÓN] No se pudo guardar el origen de la conversación:', attrErr.message);
+        }
+      }
+
+      // B.3. Identificador de la cuenta (la de WhatsApp Business, o la página).
+      // No lo sabemos al conectar el canal, pero viene en cada webhook y hace
+      // falta para informarle las ventas a Meta.
+      if (event.accountId) {
+        try {
+          await channelRepository.saveAccountId(channel.id, event.accountId);
+        } catch (accErr) {
+          console.warn('⚠️ [CANAL] No se pudo guardar el identificador de la cuenta:', accErr.message);
+        }
+      }
 
       // C. Si es un eco (el operador respondió desde WhatsApp Business móvil o Meta Business Suite):
       // Pausar inmediatamente el bot (Protocolo Handover: handed_over)

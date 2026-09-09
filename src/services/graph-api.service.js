@@ -1,7 +1,10 @@
+import fs from 'fs';
+import path from 'path';
 import { config } from '../config/index.js';
 import { timeUtil } from '../utils/index.js';
 import { channelRepository } from '../repositories/index.js';
 import { socketManager } from '../sockets/index.js';
+import { mediaService } from './media.service.js';
 
 const META_API_BASE = 'https://graph.facebook.com';
 
@@ -24,7 +27,35 @@ export const graphApiService = {
    * }} params
    * @returns {Promise<{ metaMessageId: string }>}
    */
-  async sendMessage({ channel, recipientId, text, lastCustomerInteraction = null, isHumanAgentTag = false, mediaUrl = null, contentType = 'text', fileName = null }) {
+  /**
+   * Envía un mensaje a través de Meta Graph API validando previamente la ventana de 24h / 7d.
+   * 
+   * @param {{
+   *   channel: object,
+   *   recipientId: string,
+   *   text: string,
+   *   lastCustomerInteraction?: Date|string|null,
+   *   isHumanAgentTag?: boolean,
+   *   mediaUrl?: string|null,
+   *   contentType?: string,
+   *   fileName?: string|null,
+   *   localFilePath?: string|null,
+   *   mimeType?: string|null
+   * }} params
+   * @returns {Promise<{ metaMessageId: string }>}
+   */
+  async sendMessage({
+    channel,
+    recipientId,
+    text,
+    lastCustomerInteraction = null,
+    isHumanAgentTag = false,
+    mediaUrl = null,
+    contentType = 'text',
+    fileName = null,
+    localFilePath = null,
+    mimeType = null
+  }) {
     const apiVersion = config.meta.apiVersion || 'v26.0';
     const accessToken = channel.accessToken;
 
@@ -68,13 +99,32 @@ export const graphApiService = {
       if (mediaUrl) {
         const fullMediaUrl = resolveFullMediaUrl(mediaUrl);
         const type = ['image', 'audio', 'video', 'document'].includes(contentType) ? contentType : 'document';
+        
+        // Intentar subida directa del binario local hacia Meta WhatsApp Media API
+        // Esto evita depender de enlaces externos o fallar en localhost
+        let mediaId = null;
+        const resolvedPath = localFilePath || mediaService.resolveLocalPath(mediaUrl);
+        if (resolvedPath && fs.existsSync(resolvedPath)) {
+          try {
+            const uploadMime = mimeType || (type === 'audio' ? 'audio/ogg' : 'application/octet-stream');
+            mediaId = await this.uploadMediaToWhatsApp({
+              channel,
+              accessToken,
+              filePath: resolvedPath,
+              mimeType: uploadMime
+            });
+          } catch (uploadErr) {
+            console.warn('⚠️ [WHATSAPP DIRECT UPLOAD FALLBACK] No se pudo subir directo a Meta, probando por enlace:', uploadErr.message);
+          }
+        }
+
         payload = {
           messaging_product: 'whatsapp',
           recipient_type: 'individual',
           to: recipientId,
           type,
           [type]: {
-            link: fullMediaUrl,
+            ...(mediaId ? { id: mediaId } : { link: fullMediaUrl }),
             ...(type === 'document' && fileName ? { filename: fileName } : {}),
             ...(type !== 'audio' && text ? { caption: text } : {})
           }
@@ -100,11 +150,28 @@ export const graphApiService = {
       if (mediaUrl) {
         const fullMediaUrl = resolveFullMediaUrl(mediaUrl);
         const attachmentType = contentType === 'document' ? 'file' : (['image', 'audio', 'video'].includes(contentType) ? contentType : 'file');
+        
+        // Intentar subida directa a Messenger Attachment API
+        let attachmentId = null;
+        const resolvedPath = localFilePath || mediaService.resolveLocalPath(mediaUrl);
+        if (resolvedPath && fs.existsSync(resolvedPath)) {
+          try {
+            attachmentId = await this.uploadAttachmentToMessenger({
+              channel,
+              accessToken,
+              filePath: resolvedPath,
+              attachmentType
+            });
+          } catch (uploadErr) {
+            console.warn('⚠️ [MESSENGER DIRECT ATTACHMENT FALLBACK] No se pudo subir directo a Meta, probando por enlace:', uploadErr.message);
+          }
+        }
+
         messagePayload = {
           attachment: {
             type: attachmentType,
             payload: {
-              url: fullMediaUrl,
+              ...(attachmentId ? { attachment_id: attachmentId } : { url: fullMediaUrl }),
               is_reusable: true
             }
           }
@@ -162,6 +229,74 @@ export const graphApiService = {
     }
 
     throw new Error(`Plataforma no compatible: ${channel.platform}`);
+  },
+
+  /**
+   * Sube un binario local directamente al endpoint de medios de WhatsApp Cloud API.
+   * Devuelve el ID del medio en los servidores de Meta (media_id).
+   */
+  async uploadMediaToWhatsApp({ channel, accessToken, filePath, mimeType }) {
+    const apiVersion = config.meta.apiVersion || 'v26.0';
+    const url = `${META_API_BASE}/${apiVersion}/${channel.channel_identifier}/media`;
+
+    const fileBuffer = fs.readFileSync(filePath);
+    const fileName = path.basename(filePath);
+    const formData = new FormData();
+    formData.append('messaging_product', 'whatsapp');
+    formData.append('type', mimeType);
+    formData.append('file', new Blob([fileBuffer], { type: mimeType }), fileName);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: formData
+    });
+
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      const err = data.error || {};
+      throw new Error(`[Meta WhatsApp Media Upload ${err.code || response.status}] ${err.message || 'Error al subir archivo a WhatsApp'}`);
+    }
+
+    return data.id;
+  },
+
+  /**
+   * Sube un binario local directamente al endpoint de archivos adjuntos de Messenger.
+   * Devuelve el attachment_id en los servidores de Meta.
+   */
+  async uploadAttachmentToMessenger({ channel, accessToken, filePath, attachmentType }) {
+    const apiVersion = config.meta.apiVersion || 'v26.0';
+    const url = `${META_API_BASE}/${apiVersion}/me/message_attachments`;
+
+    const fileBuffer = fs.readFileSync(filePath);
+    const fileName = path.basename(filePath);
+    const formData = new FormData();
+    formData.append('message', JSON.stringify({
+      attachment: {
+        type: attachmentType,
+        payload: { is_reusable: true }
+      }
+    }));
+    formData.append('filedata', new Blob([fileBuffer]), fileName);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: formData
+    });
+
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      const err = data.error || {};
+      throw new Error(`[Meta Messenger Attachment Upload ${err.code || response.status}] ${err.message || 'Error al subir adjunto a Messenger'}`);
+    }
+
+    return data.attachment_id;
   },
 
   /**

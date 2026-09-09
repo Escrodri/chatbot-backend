@@ -106,6 +106,39 @@ export const envConfig = Object.freeze({
     apiVersion: (process.env.META_API_VERSION || 'v26.0').trim(),
   },
 
+  // API de Conversiones: informarle a Meta las ventas que salen de una
+  // conversación, para que los anuncios se optimicen con datos reales.
+  // Opcional: sin estas variables la app funciona igual, solo que no informa.
+  conversions: {
+    datasetId: (process.env.META_DATASET_ID || '').trim(),
+    accessToken: (process.env.META_CONVERSIONS_TOKEN || '').trim(),
+
+    // Cada canal puede informar a un conjunto de datos distinto, y en la
+    // práctica casi siempre lo hace: el de WhatsApp no es un píxel que uno
+    // crea, sino el que Meta tiene atado a la cuenta de WhatsApp Business,
+    // mientras que Messenger e Instagram usan un píxel del negocio. Si además
+    // los negocios están en Business Managers separados, hasta el token cambia.
+    // Lo que se define acá manda sobre los valores generales de arriba.
+    porPlataforma: {
+      whatsapp: {
+        datasetId: (process.env.META_DATASET_ID_WHATSAPP || '').trim(),
+        accessToken: (process.env.META_CONVERSIONS_TOKEN_WHATSAPP || '').trim(),
+      },
+      facebook: {
+        datasetId: (process.env.META_DATASET_ID_MESSENGER || '').trim(),
+        accessToken: (process.env.META_CONVERSIONS_TOKEN_MESSENGER || '').trim(),
+      },
+      instagram: {
+        datasetId: (process.env.META_DATASET_ID_INSTAGRAM || '').trim(),
+        accessToken: (process.env.META_CONVERSIONS_TOKEN_INSTAGRAM || '').trim(),
+      }
+    },
+
+    // Código de prueba del Administrador de eventos. Con esto los eventos
+    // aparecen en "Eventos de prueba" y no ensucian los datos reales.
+    testEventCode: (process.env.META_TEST_EVENT_CODE || '').trim(),
+  },
+
   // Almacenamiento externo de archivos (opcional).
   // Si no se configura, los archivos se guardan solo en el disco del servidor.
   cloudinary: {

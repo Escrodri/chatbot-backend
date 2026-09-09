@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { execFile } from 'child_process';
+import ffmpeg from '@ffmpeg-installer/ffmpeg';
 import { fileURLToPath } from 'url';
 import { config } from '../config/index.js';
 import { storageService } from './storage.service.js';
@@ -54,9 +56,36 @@ export const mediaService = {
   },
 
   /**
+   * Convierte un archivo de audio WebM a OGG con códec Opus usando FFmpeg.
+   * WhatsApp y Meta exigen que las notas de voz sean OGG codificadas con Opus mono.
+   */
+  async convertWebmToOggOpus(inputPath, outputPath) {
+    return new Promise((resolve, reject) => {
+      // ffmpeg -i input.webm -c:a libopus -b:a 64k -ac 1 -y output.ogg
+      const args = ['-i', inputPath, '-c:a', 'libopus', '-b:a', '64k', '-ac', '1', '-y', outputPath];
+      execFile(ffmpeg.path, args, (err) => {
+        if (err) return reject(err);
+        resolve(outputPath);
+      });
+    });
+  },
+
+  /**
+   * Obtiene la ruta física absoluta de un archivo local en /uploads/media/
+   */
+  resolveLocalPath(localUrl) {
+    if (!localUrl || typeof localUrl !== 'string') return null;
+    const match = localUrl.match(/^\/uploads\/media\/([a-zA-Z0-9_.\-]+)$/);
+    if (!match) return null;
+    const safeName = path.basename(match[1]);
+    const fullPath = path.join(UPLOADS_DIR, safeName);
+    return fs.existsSync(fullPath) ? fullPath : null;
+  },
+
+  /**
    * Guarda un archivo multimedia enviado desde el cliente en base64.
    */
-  saveBase64Media({ fileBase64, fileName, mimeType }) {
+  async saveBase64Media({ fileBase64, fileName, mimeType }) {
     this.ensureUploadsDir();
 
     const base64Data = fileBase64.replace(/^data:([A-Za-z-+\/]+);base64,/, '');
@@ -66,15 +95,36 @@ export const mediaService = {
       throw new Error(`El archivo supera el límite máximo permitido de 25MB.`);
     }
 
-    const cleanMime = (mimeType || '').split(';')[0].trim().toLowerCase();
-    const origExt = path.extname(fileName || '').toLowerCase();
-    const ext = origExt || MIME_EXTENSION_MAP[cleanMime] || '.bin';
+    let cleanMime = (mimeType || '').split(';')[0].trim().toLowerCase();
+    let origExt = path.extname(fileName || '').toLowerCase();
+    let ext = origExt || MIME_EXTENSION_MAP[cleanMime] || '.bin';
 
     const fileHash = crypto.createHash('sha256').update(buffer).digest('hex').substring(0, 16);
-    const finalFileName = `${Date.now()}_${fileHash}${ext}`;
-    const filePath = path.join(UPLOADS_DIR, finalFileName);
+    let finalFileName = `${Date.now()}_${fileHash}${ext}`;
+    let filePath = path.join(UPLOADS_DIR, finalFileName);
 
     fs.writeFileSync(filePath, buffer);
+
+    // Si es un audio grabado en .webm (formato estándar de MediaRecorder en Chrome/Edge),
+    // lo convertimos a .ogg con códec Opus para cumplir con la especificación estricta de Meta
+    // para notas de voz en WhatsApp Cloud API, Messenger e Instagram Direct.
+    if (ext === '.webm' || cleanMime === 'audio/webm') {
+      try {
+        const convertedFileName = `${Date.now()}_${fileHash}.ogg`;
+        const convertedFilePath = path.join(UPLOADS_DIR, convertedFileName);
+        await this.convertWebmToOggOpus(filePath, convertedFilePath);
+        
+        try { fs.unlinkSync(filePath); } catch {}
+
+        finalFileName = convertedFileName;
+        filePath = convertedFilePath;
+        ext = '.ogg';
+        cleanMime = 'audio/ogg';
+        fileName = (fileName || 'nota_de_voz').replace(/\.webm$/i, '') + '.ogg';
+      } catch (convErr) {
+        console.warn('⚠️ [AUDIO TRANSCODE WARNING] No se pudo convertir WebM a Ogg Opus:', convErr.message);
+      }
+    }
 
     let contentType = 'document';
     if (cleanMime.startsWith('image/')) contentType = 'image';
@@ -88,7 +138,7 @@ export const mediaService = {
       localUrl: `/uploads/media/${finalFileName}`,
       filePath,
       mimeType: cleanMime,
-      fileSize: buffer.length,
+      fileSize: fs.existsSync(filePath) ? fs.statSync(filePath).size : buffer.length,
       contentType,
       fileName: fileName || finalFileName
     };

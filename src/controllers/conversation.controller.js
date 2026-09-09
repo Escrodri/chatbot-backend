@@ -7,6 +7,8 @@ import { graphApiService } from '../services/graph-api.service.js';
 import { timeUtil } from '../utils/index.js';
 import { socketManager } from '../sockets/index.js';
 import { mediaService } from '../services/media.service.js';
+import { conversionsService } from '../services/conversions.service.js';
+import { conversionRepository } from '../repositories/conversion.repository.js';
 
 export const conversationController = {
   /**
@@ -221,7 +223,7 @@ export const conversationController = {
       let savedMedia = null;
       if (fileBase64) {
         try {
-          savedMedia = mediaService.saveBase64Media({ fileBase64, fileName, mimeType });
+          savedMedia = await mediaService.saveBase64Media({ fileBase64, fileName, mimeType });
         } catch (mediaErr) {
           return res.status(400).json({ error: 'Error al procesar archivo adjunto: ' + mediaErr.message });
         }
@@ -283,6 +285,8 @@ export const conversationController = {
             mediaUrl,
             contentType,
             fileName: savedMedia?.fileName,
+            localFilePath: savedMedia?.filePath,
+            mimeType: savedMedia?.mimeType,
             lastCustomerInteraction: conv.last_customer_interaction
           });
           metaMessageId = sendResult?.metaMessageId || null;
@@ -434,6 +438,122 @@ export const conversationController = {
       });
     } catch (error) {
       return res.status(500).json({ error: 'Error al reintentar el envío: ' + error.message });
+    }
+  },
+
+  /**
+   * Marca que una conversación terminó en venta y se lo informa a Meta.
+   *
+   * La venta queda registrada en la base pase lo que pase. Que Meta la acepte o
+   * no es un segundo paso, y su resultado se guarda junto al registro: perder
+   * el dato de una venta porque falló una llamada a una API sería mucho peor
+   * que no poder atribuirla.
+   *
+   * POST /api/conversations/:id/sale
+   */
+  async registerSale(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: 'ID de conversación inválido' });
+      }
+
+      const { value = null, currency = 'PYG', note = null, eventName = 'Purchase' } = req.body || {};
+
+      // El monto es opcional, pero si viene tiene que ser un número válido.
+      let monto = null;
+      if (value !== null && value !== undefined && String(value).trim() !== '') {
+        monto = Number(value);
+        if (!Number.isFinite(monto) || monto < 0) {
+          return res.status(400).json({ error: 'El monto de la venta no es un número válido.' });
+        }
+      }
+
+      const conv = await conversationRepository.findById(id);
+      if (!conv) {
+        return res.status(404).json({ error: 'Conversación no encontrada' });
+      }
+
+      // Verificación IDOR: un operador solo actúa sobre sus canales.
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
+      }
+
+      // 1. Registrar la venta antes de hablar con Meta.
+      const eventId = conversionsService.generarEventId();
+      const registro = await conversionRepository.create({
+        conversationId: conv.id,
+        channelId: conv.channel_id,
+        registeredBy: req.user.id,
+        eventName,
+        eventId,
+        value: monto,
+        currency: monto !== null ? currency : null,
+        note: note ? String(note).trim().slice(0, 500) : null
+      });
+
+      // 2. Informarla a Meta.
+      const resultado = await conversionsService.informarVenta({
+        conversation: conv,
+        eventName,
+        value: monto,
+        currency: monto !== null ? currency : null,
+        eventId
+      });
+
+      const estado = resultado.ok ? 'sent' : (resultado.skipped ? 'skipped' : 'failed');
+      const actualizado = await conversionRepository.updateStatus(
+        registro.id,
+        estado,
+        resultado.ok ? null : { code: resultado.code, message: resultado.error }
+      );
+
+      return res.status(201).json({
+        success: true,
+        reported: resultado.ok,
+        sale: actualizado || registro,
+        warning: resultado.ok ? undefined : { code: resultado.code, message: resultado.error }
+      });
+    } catch (error) {
+      // El identificador de evento es único: si alguien hace doble clic, la
+      // segunda inserción choca y la venta no se cuenta dos veces.
+      if (error?.code === '23505') {
+        return res.status(409).json({ error: 'Esa venta ya fue registrada.' });
+      }
+      return res.status(500).json({ error: 'Error al registrar la venta: ' + error.message });
+    }
+  },
+
+  /**
+   * Ventas ya registradas en una conversación.
+   * GET /api/conversations/:id/sales
+   */
+  async listSales(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: 'ID de conversación inválido' });
+      }
+
+      const conv = await conversationRepository.findById(id);
+      if (!conv) {
+        return res.status(404).json({ error: 'Conversación no encontrada' });
+      }
+
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
+      }
+
+      const ventas = await conversionRepository.listByConversation(id);
+      return res.json({ success: true, sales: ventas });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al listar las ventas: ' + error.message });
     }
   },
 

@@ -22,6 +22,12 @@ conversationRouter.post('/:id/messages', conversationController.sendMessage);
 // Reintentar el envío de un mensaje que Meta rechazó (conserva el adjunto)
 conversationRouter.post('/:id/messages/:messageId/retry', conversationController.retryMessage);
 
+// Marcar que la conversación terminó en venta e informárselo a Meta
+conversationRouter.post('/:id/sale', conversationController.registerSale);
+
+// Ventas ya registradas en la conversación
+conversationRouter.get('/:id/sales', conversationController.listSales);
+
 // Alternar estado del bot (active, handed_over, disabled)
 conversationRouter.post('/:id/bot-toggle', conversationController.toggleBot);
 

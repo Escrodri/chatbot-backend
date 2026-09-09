@@ -123,3 +123,38 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS meta_media_id VARCHAR(255);
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_mime VARCHAR(100);
 
 CREATE INDEX IF NOT EXISTS idx_messages_media ON messages(meta_media_id) WHERE meta_media_id IS NOT NULL;
+
+-- ==============================================================================
+-- Atribución de anuncios y registro de ventas.
+--
+-- Cuando alguien llega desde un anuncio de clic a WhatsApp o a Messenger, Meta
+-- manda un identificador del clic UNA SOLA VEZ, dentro del webhook del primer
+-- mensaje. Hay que guardarlo con la conversación: es lo que después permite
+-- avisarle a Meta que esa charla terminó en una venta y que el anuncio funcionó.
+-- ==============================================================================
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS ctwa_clid VARCHAR(512);
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_ad_id VARCHAR(100);
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_type VARCHAR(50);
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_url TEXT;
+
+-- La cuenta de WhatsApp Business a la que pertenece el número. Viene en el
+-- webhook y hace falta para identificar el evento de conversión.
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS waba_id VARCHAR(100);
+
+-- 9. Ventas informadas a Meta (API de Conversiones)
+CREATE TABLE IF NOT EXISTS conversion_events (
+    id SERIAL PRIMARY KEY,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    registered_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    event_name VARCHAR(50) NOT NULL DEFAULT 'Purchase',
+    event_id VARCHAR(100) NOT NULL UNIQUE,            -- Evita que un doble clic cuente dos veces
+    value NUMERIC(14, 2),
+    currency VARCHAR(10),
+    note TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed', 'skipped')),
+    error_details JSONB,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversion_events_conv ON conversion_events(conversation_id, created_at DESC);

@@ -86,11 +86,23 @@ export const normalizerService = {
               // Timestamp de Meta viene en segundos UNIX
               const eventDate = msg.timestamp ? new Date(parseInt(msg.timestamp, 10) * 1000) : new Date();
 
+              // Si la persona llegó desde un anuncio de clic a WhatsApp, Meta manda
+              // acá el identificador del clic. Solo viene en este primer mensaje: si
+              // no se guarda ahora, la venta no se puede atribuir al anuncio nunca más.
+              const ref = msg.referral || null;
+
               events.push({
                 platform: 'whatsapp',
                 channelIdentifier: phoneId,
                 eventType: isEcho ? 'echo' : 'message',
                 isEcho,
+                attribution: ref ? {
+                  ctwaClid: ref.ctwa_clid || null,
+                  adId: ref.source_id || null,
+                  sourceType: ref.source_type || null,
+                  sourceUrl: ref.source_url || null
+                } : null,
+                accountId: entry.id || null, // Identificador de la cuenta de WhatsApp Business
                 sender: {
                   id: fromNumber,
                   name: contactName,
@@ -171,11 +183,22 @@ export const normalizerService = {
 
             const eventDate = item.timestamp ? new Date(item.timestamp) : new Date();
 
+            // Anuncio de origen, cuando la conversación arrancó desde un anuncio
+            // de clic a Messenger o desde un enlace m.me con referencia.
+            const ref = item.referral || item.postback?.referral || null;
+
             events.push({
               platform,
               channelIdentifier: String(channelId),
               eventType: isEcho ? 'echo' : 'message',
               isEcho,
+              attribution: ref ? {
+                ctwaClid: ref.ctwa_clid || null,
+                adId: ref.ad_id || null,
+                sourceType: ref.source || ref.type || null,
+                sourceUrl: ref.ref || null
+              } : null,
+              accountId: String(pageId || channelId),
               sender: {
                 id: String(customerId),
                 name: `Usuario ${String(customerId).slice(-4)}`, // En FB/IG el nombre se obtiene vía Graph API
@@ -191,6 +214,34 @@ export const normalizerService = {
                 mediaUrl
               }
             });
+          }
+
+          // A.2. Referido suelto (campo messaging_referrals).
+          // Cuando alguien que YA hablaba con la página vuelve desde un anuncio,
+          // Meta manda el referido en un evento aparte, sin mensaje adjunto. Si
+          // no se atiende acá, se pierde la atribución justo de los clientes que
+          // vuelven, que suelen ser los que más compran.
+          if (!item.message && item.referral) {
+            const clienteId = item.sender?.id;
+            if (clienteId) {
+              events.push({
+                platform,
+                channelIdentifier: String(item.recipient?.id || pageId),
+                eventType: 'referral',
+                sender: {
+                  id: String(clienteId),
+                  name: `Usuario ${String(clienteId).slice(-4)}`,
+                  phone: null
+                },
+                attribution: {
+                  ctwaClid: item.referral.ctwa_clid || null,
+                  adId: item.referral.ad_id || null,
+                  sourceType: item.referral.source || item.referral.type || null,
+                  sourceUrl: item.referral.ref || null
+                },
+                accountId: String(pageId || item.recipient?.id)
+              });
+            }
           }
 
           // B. Confirmaciones de lectura (read)

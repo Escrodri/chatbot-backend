@@ -5,3 +5,4 @@ export { botService } from './bot.service.js';
 export { graphApiService } from './graph-api.service.js';
 export { mediaService } from './media.service.js';
 export { storageService } from './storage.service.js';
+export { conversionsService } from './conversions.service.js';
