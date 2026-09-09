@@ -61,10 +61,19 @@ export const mediaService = {
    */
   async convertWebmToOggOpus(inputPath, outputPath) {
     return new Promise((resolve, reject) => {
+      try {
+        if (process.platform !== 'win32' && ffmpeg.path && fs.existsSync(ffmpeg.path)) {
+          fs.chmodSync(ffmpeg.path, 0o755);
+        }
+      } catch {}
+
       // ffmpeg -i input.webm -c:a libopus -b:a 64k -ac 1 -y output.ogg
       const args = ['-i', inputPath, '-c:a', 'libopus', '-b:a', '64k', '-ac', '1', '-y', outputPath];
-      execFile(ffmpeg.path, args, (err) => {
-        if (err) return reject(err);
+      execFile(ffmpeg.path, args, (err, stdout, stderr) => {
+        if (err) {
+          console.error('❌ [FFMPEG AUDIO TRANSCODE ERROR]:', stderr || err.message);
+          return reject(err);
+        }
         resolve(outputPath);
       });
     });
@@ -88,8 +97,12 @@ export const mediaService = {
   async saveBase64Media({ fileBase64, fileName, mimeType }) {
     this.ensureUploadsDir();
 
-    const base64Data = fileBase64.replace(/^data:([A-Za-z-+\/]+);base64,/, '');
-    const buffer = Buffer.from(base64Data, 'base64');
+    // Extraer limpiamente los datos base64 eliminando el prefijo data:...;base64,
+    // garantizando soporte para tipos MIME con parámetros como audio/webm;codecs=opus
+    const base64Data = fileBase64.includes(';base64,')
+      ? fileBase64.slice(fileBase64.indexOf(';base64,') + 8)
+      : fileBase64;
+    const buffer = Buffer.from(base64Data.trim(), 'base64');
 
     if (buffer.length > MAX_FILE_SIZE_BYTES) {
       throw new Error(`El archivo supera el límite máximo permitido de 25MB.`);

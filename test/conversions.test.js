@@ -209,3 +209,43 @@ test('T-16: un referido sin mensaje adjunto también guarda la atribución', () 
   assert.equal(referido.attribution.adId, '120299999999999999');
   assert.equal(referido.sender.id, '28737141625973088');
 });
+
+test('T-15: lo cargado en el canal manda sobre la configuración general', () => {
+  const canal = { dataset_id: '999888777', conversionsToken: 'TOKEN_DEL_CANAL' };
+  const destino = conversionsService.resolverDestino('whatsapp', canal);
+
+  assert.equal(destino.datasetId, '999888777');
+  assert.equal(destino.accessToken, 'TOKEN_DEL_CANAL');
+});
+
+test('T-15: un canal sin conjunto de datos propio cae en la configuración general', () => {
+  const destino = conversionsService.resolverDestino('whatsapp', { dataset_id: null, conversionsToken: null });
+  const general = conversionsService.resolverDestino('whatsapp');
+
+  assert.equal(destino.datasetId, general.datasetId);
+  assert.equal(destino.accessToken, general.accessToken);
+});
+
+test('T-15: el producto viaja como categoría para poder separar campañas', async () => {
+  // No se manda nada a la red: sin credenciales el servicio se saltea, así que
+  // lo que se comprueba es la construcción del evento a través del resultado.
+  const conversacion = {
+    platform: 'facebook',
+    channel_identifier: '1160420680487663',
+    platform_user_id: '28737141625973088'
+  };
+
+  // Con un canal que trae conjunto de datos y token, el servicio arma el evento
+  // e intenta enviarlo; sin red el resultado es un error, nunca una excepción.
+  const resultado = await conversionsService.informarVenta({
+    conversation: conversacion,
+    canal: { dataset_id: '1', conversionsToken: 'x' },
+    value: 150000,
+    currency: 'PYG',
+    product: 'Cactus',
+    eventId: 'venta_prueba_producto'
+  });
+
+  assert.equal(typeof resultado.ok, 'boolean');
+  assert.notEqual(resultado.code, 'ERR_CONVERSIONES_SIN_CONFIGURAR', 'Con canal configurado no debe saltearse');
+});

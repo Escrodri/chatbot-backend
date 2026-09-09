@@ -13,16 +13,16 @@ export const conversionRepository = {
    *
    * @param {{ conversationId: number, channelId: number, registeredBy: number|null,
    *           eventName?: string, eventId: string, value?: number|null,
-   *           currency?: string|null, note?: string|null }} datos
+   *           currency?: string|null, note?: string|null, product?: string|null }} datos
    * @returns {Promise<object>}
    */
-  async create({ conversationId, channelId, registeredBy = null, eventName = 'Purchase', eventId, value = null, currency = null, note = null }) {
+  async create({ conversationId, channelId, registeredBy = null, eventName = 'Purchase', eventId, value = null, currency = null, note = null, product = null }) {
     const { rows } = await query(
       `INSERT INTO conversion_events
-         (conversation_id, channel_id, registered_by, event_name, event_id, value, currency, note, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+         (conversation_id, channel_id, registered_by, event_name, event_id, value, currency, note, product, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
        RETURNING *`,
-      [conversationId, channelId, registeredBy, eventName, eventId, value, currency, note]
+      [conversationId, channelId, registeredBy, eventName, eventId, value, currency, note, product]
     );
     return rows[0];
   },
@@ -54,7 +54,7 @@ export const conversionRepository = {
    */
   async listByConversation(conversationId) {
     const { rows } = await query(
-      `SELECT id, event_name, event_id, value, currency, note, status, error_details, created_at
+      `SELECT id, event_name, event_id, value, currency, note, product, status, error_details, created_at
        FROM conversion_events
        WHERE conversation_id = $1
        ORDER BY created_at DESC`,

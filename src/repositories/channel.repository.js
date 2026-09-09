@@ -118,7 +118,8 @@ export const channelRepository = {
    */
   async listAll() {
     const { rows } = await query(
-      `SELECT id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at 
+      `SELECT id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at,
+              dataset_id, waba_id, (conversions_token_encrypted IS NOT NULL) AS tiene_token_conversiones 
        FROM channels 
        WHERE deleted_at IS NULL
        ORDER BY id ASC`
@@ -188,7 +189,7 @@ export const channelRepository = {
    * @param {{ name?: string, channelIdentifier?: string, colorTag?: string, status?: 'active'|'error'|'paused', accessToken?: string, appId?: string, appSecret?: string }} data 
    * @returns {Promise<object|null>}
    */
-  async update(id, { name, channelIdentifier, colorTag, status, accessToken, appId, appSecret } = {}) {
+  async update(id, { name, channelIdentifier, colorTag, status, accessToken, appId, appSecret, datasetId, conversionsToken } = {}) {
     const fields = [];
     const values = [];
     let idx = 1;
@@ -214,6 +215,19 @@ export const channelRepository = {
       fields.push(`app_secret_encrypted = $${idx++}`);
       values.push(encryptedSecretJson);
     }
+    if (datasetId !== undefined) {
+      fields.push(`dataset_id = $${idx++}`);
+      values.push(datasetId && String(datasetId).trim() ? String(datasetId).trim() : null);
+    }
+    if (conversionsToken !== undefined) {
+      // Cadena vacía = borrar el token guardado.
+      let cifrado = null;
+      if (conversionsToken && String(conversionsToken).trim()) {
+        cifrado = JSON.stringify(encryptSecret(String(conversionsToken).trim()));
+      }
+      fields.push(`conversions_token_encrypted = $${idx++}`);
+      values.push(cifrado);
+    }
     if (colorTag !== undefined) {
       fields.push(`color_tag = $${idx++}`);
       values.push(colorTag.trim());
@@ -235,7 +249,8 @@ export const channelRepository = {
 
     if (fields.length === 0) {
       const { rows } = await query(
-        `SELECT id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at 
+        `SELECT id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at,
+              dataset_id, waba_id, (conversions_token_encrypted IS NOT NULL) AS tiene_token_conversiones 
          FROM channels WHERE id = $1`,
         [id]
       );
@@ -354,9 +369,20 @@ export const channelRepository = {
       }
     }
 
+    // 3. Descifrar el token de la API de Conversiones, si el canal tiene uno propio
+    if (channel.conversions_token_encrypted) {
+      try {
+        const obj = JSON.parse(channel.conversions_token_encrypted);
+        channel.conversionsToken = decryptSecret(obj.cipherText, obj.iv, obj.tag);
+      } catch {
+        channel.conversionsToken = null;
+      }
+    }
+
     // Limpiar campos de almacenamiento criptográfico crudo
     delete channel.access_token_encrypted;
     delete channel.app_secret_encrypted;
+    delete channel.conversions_token_encrypted;
     delete channel.token_iv;
     delete channel.token_tag;
 

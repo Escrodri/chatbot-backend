@@ -158,3 +158,14 @@ CREATE TABLE IF NOT EXISTS conversion_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversion_events_conv ON conversion_events(conversation_id, created_at DESC);
+
+-- Cada canal puede informar sus ventas a un conjunto de datos distinto, con su
+-- propio token. Es lo normal cuando los negocios viven en Business Managers
+-- separados, o cuando el de WhatsApp es el que Meta ata a la cuenta y el de
+-- Messenger es un píxel del negocio.
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS dataset_id VARCHAR(100);
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS conversions_token_encrypted TEXT;
+
+-- Producto vendido. Va dentro del evento como categoría, y sirve para armar
+-- conversiones personalizadas por producto en el Administrador de eventos.
+ALTER TABLE conversion_events ADD COLUMN IF NOT EXISTS product VARCHAR(200);

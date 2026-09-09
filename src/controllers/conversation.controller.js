@@ -458,7 +458,7 @@ export const conversationController = {
         return res.status(400).json({ error: 'ID de conversación inválido' });
       }
 
-      const { value = null, currency = 'PYG', note = null, eventName = 'Purchase' } = req.body || {};
+      const { value = null, currency = 'PYG', note = null, product = null, eventName = 'Purchase' } = req.body || {};
 
       // El monto es opcional, pero si viene tiene que ser un número válido.
       let monto = null;
@@ -492,15 +492,20 @@ export const conversationController = {
         eventId,
         value: monto,
         currency: monto !== null ? currency : null,
-        note: note ? String(note).trim().slice(0, 500) : null
+        note: note ? String(note).trim().slice(0, 500) : null,
+        product: product ? String(product).trim().slice(0, 200) : null
       });
 
-      // 2. Informarla a Meta.
+      // 2. Informarla a Meta. El canal puede tener su propio conjunto de datos
+      // y su propio token, cargados desde Configuración.
+      const canalCompleto = await channelRepository.findById(conv.channel_id);
       const resultado = await conversionsService.informarVenta({
         conversation: conv,
+        canal: canalCompleto,
         eventName,
         value: monto,
         currency: monto !== null ? currency : null,
+        product: product ? String(product).trim().slice(0, 200) : null,
         eventId
       });
 

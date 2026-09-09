@@ -46,13 +46,15 @@ export const conversionsService = {
    * @param {string} plataforma 'whatsapp' | 'facebook' | 'instagram'
    * @returns {{ datasetId: string, accessToken: string }}
    */
-  resolverDestino(plataforma) {
+  resolverDestino(plataforma, canal = null) {
     const general = config.conversions || {};
-    const propio = general.porPlataforma?.[plataforma] || {};
+    const porPlataforma = general.porPlataforma?.[plataforma] || {};
 
+    // Orden de precedencia: lo que el canal tenga cargado en Configuración,
+    // después lo definido por plataforma, y al final lo general.
     return {
-      datasetId: propio.datasetId || general.datasetId || '',
-      accessToken: propio.accessToken || general.accessToken || ''
+      datasetId: canal?.dataset_id || porPlataforma.datasetId || general.datasetId || '',
+      accessToken: canal?.conversionsToken || porPlataforma.accessToken || general.accessToken || ''
     };
   },
 
@@ -159,8 +161,8 @@ export const conversionsService = {
    * }} params
    * @returns {Promise<{ ok: boolean, skipped?: boolean, error?: string, code?: string, respuesta?: object }>}
    */
-  async informarVenta({ conversation, eventName = 'Purchase', value = null, currency = null, eventId, eventTime = new Date() }) {
-    const destino = this.resolverDestino(conversation.platform);
+  async informarVenta({ conversation, canal = null, eventName = 'Purchase', value = null, currency = null, product = null, eventId, eventTime = new Date() }) {
+    const destino = this.resolverDestino(conversation.platform, canal);
 
     if (!destino.datasetId || !destino.accessToken) {
       return {
@@ -177,22 +179,36 @@ export const conversionsService = {
     }
 
     const apiVersion = config.meta.apiVersion || 'v26.0';
-    const canal = CANAL_META[conversation.platform];
+    const canalMeta = CANAL_META[conversation.platform];
 
     const evento = {
       event_name: eventName,
       event_time: Math.floor(eventTime.getTime() / 1000),
       event_id: eventId,
       action_source: 'business_messaging',
-      messaging_channel: canal,
+      messaging_channel: canalMeta,
       user_data: identificacion.userData
     };
 
+    const datosPropios = {};
+
     if (value !== null && value !== undefined && currency) {
-      evento.custom_data = {
-        currency: String(currency).toUpperCase(),
-        value: Number(value)
-      };
+      datosPropios.currency = String(currency).toUpperCase();
+      datosPropios.value = Number(value);
+    }
+
+    // El producto viaja como categoría y como nombre. Con la categoría se arman
+    // conversiones personalizadas por producto en el Administrador de eventos,
+    // que es la forma correcta de separar campañas sin partir el conjunto de
+    // datos en pedazos: dividirlo haría que Meta aprenda peor en todos.
+    if (product && String(product).trim()) {
+      const limpio = String(product).trim().slice(0, 200);
+      datosPropios.content_category = limpio;
+      datosPropios.content_name = limpio;
+    }
+
+    if (Object.keys(datosPropios).length > 0) {
+      evento.custom_data = datosPropios;
     }
 
     const cuerpo = {
@@ -226,7 +242,7 @@ export const conversionsService = {
       }
 
       console.log(
-        `💰 [CONVERSIONES] Venta informada a Meta (${canal}, evento ${eventId}). ` +
+        `💰 [CONVERSIONES] Venta informada a Meta (${canalMeta}, evento ${eventId}). ` +
         `Recibidos: ${datos.events_received ?? 1}.`
       );
       return { ok: true, respuesta: datos };
