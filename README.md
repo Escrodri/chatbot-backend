@@ -144,7 +144,7 @@ backend/
 │   │   └── rate-limit.middleware.js
 │   ├── repositories/        # Capa de acceso a datos SQL
 │   ├── routes/              # Definición de rutas Express
-│   ├── scripts/             # Scripts auxiliares (seed-admin, password reset)
+│   ├── scripts/             # Scripts auxiliares (password reset, set-admin-password)
 │   ├── services/            # Servicios de integración externa (Meta Graph API)
 │   └── sockets/             # Gestor de eventos en tiempo real con Socket.io
 └── test/                    # Suite de pruebas automatizadas

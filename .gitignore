@@ -24,3 +24,11 @@ Thumbs.db
 # Docker persistent volumes
 pgdata/
 
+# Temporary and local files
+cookies.txt
+*.tmp
+*.tmp.*
+*.lock
+!package-lock.json
+_to_delete/
+.gemini/
