@@ -67,8 +67,12 @@ export function createApp() {
 
   app.use(cookieParser());
 
-  // 3. Archivos multimedia descargados de Meta
-  app.use('/uploads', express.static(path.resolve(__dirname, '../uploads')));
+  // 3. Archivos multimedia descargados de Meta y enviados por operadores
+  app.use('/uploads', (req, res, next) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    next();
+  }, express.static(path.resolve(__dirname, '../uploads')));
 
   // 4. Parsers con captura de rawBody para verificar la firma de Meta
   app.use(rawBodyJsonParser);

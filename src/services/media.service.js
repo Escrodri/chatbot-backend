@@ -16,9 +16,17 @@ const MIME_EXTENSION_MAP = {
   'audio/ogg; codecs=opus': '.ogg',
   'audio/mp4': '.m4a',
   'audio/mpeg': '.mp3',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/aac': '.aac',
   'image/jpeg': '.jpg',
+  'image/pjpeg': '.jpg',
+  'image/jfif': '.jpg',
   'image/png': '.png',
   'image/webp': '.webp',
+  'image/gif': '.gif',
+  'image/bmp': '.bmp',
+  'image/svg+xml': '.svg',
   'video/mp4': '.mp4',
   'video/3gpp': '.3gp',
   'video/quicktime': '.mov',
@@ -40,6 +48,44 @@ export const mediaService = {
     if (!fs.existsSync(UPLOADS_DIR)) {
       fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     }
+  },
+
+  /**
+   * Guarda un archivo multimedia enviado desde el cliente en base64.
+   */
+  saveBase64Media({ fileBase64, fileName, mimeType }) {
+    this.ensureUploadsDir();
+
+    const base64Data = fileBase64.replace(/^data:([A-Za-z-+\/]+);base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    if (buffer.length > MAX_FILE_SIZE_BYTES) {
+      throw new Error(`El archivo supera el límite máximo permitido de 25MB.`);
+    }
+
+    const cleanMime = (mimeType || '').split(';')[0].trim().toLowerCase();
+    const origExt = path.extname(fileName || '').toLowerCase();
+    const ext = origExt || MIME_EXTENSION_MAP[cleanMime] || '.bin';
+
+    const fileHash = crypto.createHash('sha256').update(buffer).digest('hex').substring(0, 16);
+    const finalFileName = `${Date.now()}_${fileHash}${ext}`;
+    const filePath = path.join(UPLOADS_DIR, finalFileName);
+
+    fs.writeFileSync(filePath, buffer);
+
+    let contentType = 'document';
+    if (cleanMime.startsWith('image/')) contentType = 'image';
+    else if (cleanMime.startsWith('audio/')) contentType = 'audio';
+    else if (cleanMime.startsWith('video/')) contentType = 'video';
+
+    return {
+      localUrl: `/uploads/media/${finalFileName}`,
+      filePath,
+      mimeType: cleanMime,
+      fileSize: buffer.length,
+      contentType,
+      fileName: fileName || finalFileName
+    };
   },
 
   /**

@@ -53,17 +53,41 @@ export const graphApiService = {
       }
     }
 
+    function resolveFullMediaUrl(mediaUrl) {
+      if (!mediaUrl) return '';
+      if (/^https?:\/\//i.test(mediaUrl)) return mediaUrl;
+      const baseUrl = (process.env.BACKEND_PUBLIC_URL || (config.isProd ? 'https://chatbot-backend-aq9n.onrender.com' : 'http://localhost:3000')).replace(/\/+$/, '');
+      return `${baseUrl}${mediaUrl.startsWith('/') ? mediaUrl : `/${mediaUrl}`}`;
+    }
+
     // 1. WHATSAPP CLOUD API
     if (channel.platform === 'whatsapp') {
       const url = `${META_API_BASE}/${apiVersion}/${channel.channel_identifier}/messages`;
-      
-      const payload = {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: recipientId,
-        type: 'text',
-        text: { preview_url: false, body: text }
-      };
+      let payload;
+
+      if (mediaUrl) {
+        const fullMediaUrl = resolveFullMediaUrl(mediaUrl);
+        const type = ['image', 'audio', 'video', 'document'].includes(contentType) ? contentType : 'document';
+        payload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: recipientId,
+          type,
+          [type]: {
+            link: fullMediaUrl,
+            ...(type === 'document' && fileName ? { filename: fileName } : {}),
+            ...(type !== 'audio' && text ? { caption: text } : {})
+          }
+        };
+      } else {
+        payload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: recipientId,
+          type: 'text',
+          text: { preview_url: false, body: text }
+        };
+      }
 
       return this._postToMeta(url, accessToken, payload, channel, (data) => data.messages?.[0]?.id);
     }
@@ -71,10 +95,27 @@ export const graphApiService = {
     // 2. FACEBOOK MESSENGER
     if (channel.platform === 'facebook') {
       const url = `${META_API_BASE}/${apiVersion}/me/messages`;
+      let messagePayload;
+
+      if (mediaUrl) {
+        const fullMediaUrl = resolveFullMediaUrl(mediaUrl);
+        const attachmentType = contentType === 'document' ? 'file' : (['image', 'audio', 'video'].includes(contentType) ? contentType : 'file');
+        messagePayload = {
+          attachment: {
+            type: attachmentType,
+            payload: {
+              url: fullMediaUrl,
+              is_reusable: true
+            }
+          }
+        };
+      } else {
+        messagePayload = { text };
+      }
 
       const payload = {
         recipient: { id: recipientId },
-        message: { text }
+        message: messagePayload
       };
 
       if (isHumanAgentTag) {
@@ -90,10 +131,25 @@ export const graphApiService = {
     // 3. INSTAGRAM DIRECT
     if (channel.platform === 'instagram') {
       const url = `${META_API_BASE}/${apiVersion}/me/messages`;
+      let messagePayload;
+
+      if (mediaUrl) {
+        const fullMediaUrl = resolveFullMediaUrl(mediaUrl);
+        messagePayload = {
+          attachment: {
+            type: 'image',
+            payload: {
+              url: fullMediaUrl
+            }
+          }
+        };
+      } else {
+        messagePayload = { text };
+      }
 
       const payload = {
         recipient: { id: recipientId },
-        message: { text }
+        message: messagePayload
       };
 
       if (isHumanAgentTag) {

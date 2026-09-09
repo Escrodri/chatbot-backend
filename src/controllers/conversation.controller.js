@@ -5,6 +5,7 @@ import { userRepository } from '../repositories/user.repository.js';
 import { graphApiService } from '../services/graph-api.service.js';
 import { timeUtil } from '../utils/index.js';
 import { socketManager } from '../sockets/index.js';
+import { mediaService } from '../services/media.service.js';
 
 export const conversationController = {
   /**
@@ -127,14 +128,14 @@ export const conversationController = {
   async sendMessage(req, res) {
     try {
       const id = parseInt(req.params.id, 10);
-      const { text } = req.body;
+      const { text, fileBase64, fileName, mimeType } = req.body;
 
       if (isNaN(id)) {
         return res.status(400).json({ error: 'ID de conversación inválido' });
       }
 
-      if (!text || !text.trim()) {
-        return res.status(400).json({ error: 'El contenido del mensaje es obligatorio' });
+      if ((!text || !text.trim()) && !fileBase64) {
+        return res.status(400).json({ error: 'El mensaje debe contener texto o un archivo adjunto' });
       }
 
       const conv = await conversationRepository.findById(id);
@@ -150,6 +151,20 @@ export const conversationController = {
         }
       }
 
+      // 0. Si se adjuntó un archivo, procesarlo y guardarlo
+      let savedMedia = null;
+      if (fileBase64) {
+        try {
+          savedMedia = mediaService.saveBase64Media({ fileBase64, fileName, mimeType });
+        } catch (mediaErr) {
+          return res.status(400).json({ error: 'Error al procesar archivo adjunto: ' + mediaErr.message });
+        }
+      }
+
+      const contentType = savedMedia ? savedMedia.contentType : 'text';
+      const mediaUrl = savedMedia ? savedMedia.localUrl : null;
+      const messageText = (text || (savedMedia ? `[Archivo: ${savedMedia.fileName}]` : '')).trim();
+
       // 1. Persistir mensaje en base de datos
       const inserted = await messageRepository.insertMessage({
         conversationId: conv.id,
@@ -157,17 +172,17 @@ export const conversationController = {
         direction: 'outbound',
         senderType: 'agent',
         senderUserId: req.user.id,
-        contentType: 'text',
-        text: text.trim(),
+        contentType,
+        text: messageText,
+        mediaUrl,
         status: 'pending'
       });
 
       // 2. Protocolo Handover: Pausar el bot para este chat
       await conversationRepository.updateBotStatus(conv.id, 'handed_over', req.user.id);
-      await conversationRepository.updateOutboundMessage(conv.id, text.trim());
+      await conversationRepository.updateOutboundMessage(conv.id, messageText);
 
       // 3. Despacho hacia Meta Graph API.
-      //    Un mensaje solo se marca como enviado si Meta lo aceptó de verdad (A-02).
       let metaMessageId = null;
       let sendError = null;
 
@@ -188,7 +203,10 @@ export const conversationController = {
           const sendResult = await graphApiService.sendMessage({
             channel: fullChannel,
             recipientId: conv.platform_user_id || conv.contact_phone,
-            text: text.trim(),
+            text: (text || '').trim(),
+            mediaUrl,
+            contentType,
+            fileName: savedMedia?.fileName,
             lastCustomerInteraction: conv.last_customer_interaction
           });
           metaMessageId = sendResult?.metaMessageId || null;
