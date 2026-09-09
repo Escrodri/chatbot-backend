@@ -20,6 +20,8 @@ const MIME_EXTENSION_MAP = {
   'audio/wav': '.wav',
   'audio/x-wav': '.wav',
   'audio/aac': '.aac',
+  'audio/webm': '.webm',
+  'audio/webm; codecs=opus': '.webm',
   'image/jpeg': '.jpg',
   'image/pjpeg': '.jpg',
   'image/jfif': '.jpg',
@@ -78,6 +80,9 @@ export const mediaService = {
     if (cleanMime.startsWith('image/')) contentType = 'image';
     else if (cleanMime.startsWith('audio/')) contentType = 'audio';
     else if (cleanMime.startsWith('video/')) contentType = 'video';
+    else if (['.mp3', '.ogg', '.opus', '.m4a', '.aac', '.wav', '.webm'].includes(ext)) contentType = 'audio';
+    else if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'].includes(ext)) contentType = 'image';
+    else if (['.mp4', '.mov', '.3gp'].includes(ext)) contentType = 'video';
 
     return {
       localUrl: `/uploads/media/${finalFileName}`,

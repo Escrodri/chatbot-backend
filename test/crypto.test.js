@@ -22,14 +22,16 @@ test('T-02: AES-256-GCM Falla ante manipulación de datos (Integridad AppSec)', 
   const originalSecret = 'secret_data';
   const encrypted = encryptSecret(originalSecret);
 
-  // Alterar un byte del ciphertext
-  const tamperedCipher = '00' + encrypted.cipherText.slice(2);
+  // Alterar un byte del ciphertext asegurando que sea diferente
+  const firstCipherByte = encrypted.cipherText.slice(0, 2);
+  const tamperedCipher = (firstCipherByte === '00' ? 'ff' : '00') + encrypted.cipherText.slice(2);
   assert.throws(() => {
     decryptSecret(tamperedCipher, encrypted.iv, encrypted.tag);
   }, /unable to authenticate data/i, 'Debe rechazar ciphertext alterado');
 
-  // Alterar un byte del auth tag
-  const tamperedTag = 'ff' + encrypted.tag.slice(2);
+  // Alterar un byte del auth tag asegurando que sea diferente
+  const firstTagByte = encrypted.tag.slice(0, 2);
+  const tamperedTag = (firstTagByte === 'ff' ? '00' : 'ff') + encrypted.tag.slice(2);
   assert.throws(() => {
     decryptSecret(encrypted.cipherText, encrypted.iv, tamperedTag);
   }, /unable to authenticate data/i, 'Debe rechazar auth tag alterado');

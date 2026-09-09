@@ -101,6 +101,9 @@ export const webhookService = {
     if (event.eventType === 'message' || event.eventType === 'echo') {
       let contactName = event.sender.name || `Contacto ${event.sender.id.slice(-4)}`;
       let contactAvatar = null;
+      // En Facebook e Instagram el nombre no viene en el webhook: hay que pedirlo
+      // aparte. Hasta lograrlo, el nombre es un relleno y así queda marcado.
+      let nombreProvisional = event.platform === 'facebook' || event.platform === 'instagram';
       let phoneOrUsername = event.sender.phone || null;
 
       // Enriquecer perfil de usuario desde Meta Graph API para Facebook e Instagram
@@ -112,7 +115,10 @@ export const webhookService = {
             platformUserId: event.sender.id,
             accessToken: channelToken
           });
-          if (profile?.name) contactName = profile.name;
+          if (profile?.name) {
+            contactName = profile.name;
+            nombreProvisional = false;
+          }
           if (profile?.avatarUrl) contactAvatar = profile.avatarUrl;
           if (profile?.username) phoneOrUsername = `@${profile.username}`;
         } catch (profileErr) {
@@ -127,7 +133,8 @@ export const webhookService = {
         platformUserId: event.sender.id,
         name: contactName,
         phoneOrUsername,
-        avatarUrl: contactAvatar
+        avatarUrl: contactAvatar,
+        nameIsPlaceholder: nombreProvisional
       });
 
       // B. Buscar o crear la conversación

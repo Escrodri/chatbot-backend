@@ -150,8 +150,8 @@ test('T-22: POST, PUT y DELETE /api/settings/channels gestiona canales con cifra
   const deleteBody = await deleteRes.json();
   assert.equal(deleteBody.success, true);
 
-  // 5. Verificar que ya no existe
-  const { rows: afterDelete } = await query('SELECT id FROM channels WHERE id = $1', [channelId]);
+  // 5. Verificar que ya no existe (soft-deleted)
+  const { rows: afterDelete } = await query('SELECT id FROM channels WHERE id = $1 AND deleted_at IS NULL', [channelId]);
   assert.equal(afterDelete.length, 0);
 });
 

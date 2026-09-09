@@ -135,9 +135,10 @@ export const graphApiService = {
 
       if (mediaUrl) {
         const fullMediaUrl = resolveFullMediaUrl(mediaUrl);
+        const igAttachmentType = ['image', 'audio', 'video'].includes(contentType) ? contentType : 'image';
         messagePayload = {
           attachment: {
-            type: 'image',
+            type: igAttachmentType,
             payload: {
               url: fullMediaUrl
             }

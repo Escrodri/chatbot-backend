@@ -236,7 +236,8 @@ export const conversationController = {
 
       const contentType = savedMedia ? savedMedia.contentType : 'text';
       const mediaUrl = savedMedia ? savedMedia.localUrl : null;
-      const messageText = (text || (savedMedia ? `[Archivo: ${savedMedia.fileName}]` : '')).trim();
+      const defaultMediaText = savedMedia ? (savedMedia.contentType === 'audio' ? '🎵 [Nota de voz / Audio]' : `[Archivo: ${savedMedia.fileName}]`) : '';
+      const messageText = (text || defaultMediaText).trim();
 
       // 1. Persistir mensaje en base de datos
       const inserted = await messageRepository.insertMessage({

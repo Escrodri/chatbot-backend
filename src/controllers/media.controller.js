@@ -76,6 +76,9 @@ export const mediaController = {
             else if (ext === '.gif') mime = 'image/gif';
             else if (ext === '.mp3') mime = 'audio/mpeg';
             else if (['.ogg', '.opus'].includes(ext)) mime = 'audio/ogg';
+            else if (['.m4a', '.aac'].includes(ext)) mime = 'audio/mp4';
+            else if (['.wav'].includes(ext)) mime = 'audio/wav';
+            else if (ext === '.webm') mime = 'audio/webm';
             else if (ext === '.mp4') mime = 'video/mp4';
             else if (ext === '.pdf') mime = 'application/pdf';
           }
