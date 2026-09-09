@@ -48,6 +48,32 @@ function validateEnv() {
   }
 }
 
+
+/**
+ * Lista de orígenes autorizados para CORS y para el WebSocket.
+ * En producción se define con ALLOWED_ORIGINS (separados por comas).
+ * En desarrollo se permiten los puertos locales de Vite y del propio backend.
+ */
+function resolveAllowedOrigins() {
+  const raw = (process.env.ALLOWED_ORIGINS || '').trim();
+
+  if (raw) {
+    return raw.split(',').map(o => o.trim()).filter(Boolean);
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    console.warn('⚠️  [CONFIG] ALLOWED_ORIGINS no está definida. Solo se aceptarán peticiones del mismo origen.');
+    return [];
+  }
+
+  return [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000'
+  ];
+}
+
 // Ejecutar validación
 validateEnv();
 
@@ -69,6 +95,7 @@ export const envConfig = Object.freeze({
   security: {
     encryptionKey: process.env.ENCRYPTION_KEY.trim(),
     sessionSecret: process.env.SESSION_SECRET.trim(),
+    allowedOrigins: Object.freeze(resolveAllowedOrigins()),
   },
 
   meta: {

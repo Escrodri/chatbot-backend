@@ -1,4 +1,4 @@
-# Omnichannel CRM & Tarot Chatbot - Backend API
+# Lecturas de Tarde - Backend API
 
 Servidor backend omnicanal de alto rendimiento para gestión unificada de conversaciones de **WhatsApp Cloud API**, **Facebook Messenger** e **Instagram Direct**, con arquitectura en capas (Layered Architecture), seguridad criptográfica AppSec y cumplimiento estricto con **Meta Graph API v25.0**.
 

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -28,16 +29,41 @@ export async function initDatabase() {
     const { rows: users } = await client.query('SELECT id FROM users LIMIT 1');
     if (users.length === 0) {
       console.log('🌱 [DATABASE] Sembrando usuario administrador inicial...');
-      const defaultPassword = 'admin123';
-      const salt = await bcrypt.genSalt(10);
-      const passwordHash = await bcrypt.hash(defaultPassword, salt);
+
+      const adminEmail = (process.env.ADMIN_EMAIL || 'admin@empresa.com').toLowerCase().trim();
+
+      // La contraseña NUNCA se escribe en el código. Sale de ADMIN_PASSWORD y, si no
+      // está definida, se genera una aleatoria que se muestra una sola vez en consola.
+      const envPassword = (process.env.ADMIN_PASSWORD || '').trim();
+      const generated = !envPassword;
+      const initialPassword = envPassword || crypto.randomBytes(12).toString('base64url');
+
+      if (envPassword && envPassword.length < 12) {
+        console.warn('⚠️  [DATABASE] ADMIN_PASSWORD tiene menos de 12 caracteres. Usá una más larga.');
+      }
+
+      const passwordHash = await bcrypt.hash(initialPassword, 12);
 
       await client.query(
         `INSERT INTO users (email, password_hash, name, role, is_active)
          VALUES ($1, $2, $3, $4, $5)`,
-        ['admin@empresa.com', passwordHash, 'Administrador del Sistema', 'admin', true]
+        [adminEmail, passwordHash, 'Administrador del Sistema', 'admin', true]
       );
-      console.log('✅ [DATABASE] Administrador sembrado con éxito: admin@empresa.com / admin123');
+
+      if (generated) {
+        console.log('');
+        console.log('┌───────────────────────────────────────────────────────────────┐');
+        console.log('│  ADMINISTRADOR CREADO — anotá esta contraseña ahora.          │');
+        console.log('│  No se vuelve a mostrar y no queda guardada en ningún lado.   │');
+        console.log('└───────────────────────────────────────────────────────────────┘');
+        console.log(`   Usuario:     ${adminEmail}`);
+        console.log(`   Contraseña:  ${initialPassword}`);
+        console.log('');
+        console.log('   Para cambiarla más adelante:  npm run set-admin-password');
+        console.log('');
+      } else {
+        console.log(`✅ [DATABASE] Administrador sembrado: ${adminEmail} (contraseña tomada de ADMIN_PASSWORD).`);
+      }
     }
   } catch (error) {
     console.error('❌ [DATABASE ERROR] Error al inicializar esquema PostgreSQL:', error.message);

@@ -20,3 +20,7 @@ public/uploads/
 Thumbs.db
 .vscode/
 .idea/
+
+# Docker persistent volumes
+pgdata/
+

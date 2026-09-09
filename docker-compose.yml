@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chatbot_postgres
+    restart: unless-stopped
+
+    # Credenciales leídas directamente del .env del backend
+    env_file:
+      - .env
+
+    # Enlazado solo a la interfaz local (127.0.0.1) por seguridad
+    ports:
+      - "127.0.0.1:5432:5432"
+
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

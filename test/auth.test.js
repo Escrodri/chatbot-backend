@@ -4,7 +4,8 @@ import http from 'node:http';
 import { createApp } from '../src/app.js';
 import { signToken, verifyToken } from '../src/utils/jwt.util.js';
 import { requireAuth, requireAdmin } from '../src/middlewares/auth.middleware.js';
-import { pool } from '../src/database/index.js';
+import { pool, query } from '../src/database/index.js';
+import bcrypt from 'bcryptjs';
 import express from 'express';
 
 after(async () => {
@@ -12,6 +13,23 @@ after(async () => {
 });
 
 const TEST_SECRET = 'test_jwt_secret_key_antigravity_sdd_2026_abcdef123456';
+
+// Usuario propio de la suite. Los tests no deben depender de la contraseña
+// del administrador sembrado: esa ahora es aleatoria o viene del entorno.
+const TEST_ADMIN_EMAIL = 'test-admin@pruebas.local';
+const TEST_ADMIN_PASSWORD = 'contrasena-de-prueba-12345';
+
+/** Crea (o actualiza) el administrador de pruebas y devuelve sus credenciales. */
+async function ensureTestAdmin() {
+  const hash = await bcrypt.hash(TEST_ADMIN_PASSWORD, 10);
+  await query(
+    `INSERT INTO users (email, password_hash, name, role, is_active)
+     VALUES ($1, $2, 'Admin de Pruebas', 'admin', true)
+     ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true`,
+    [TEST_ADMIN_EMAIL, hash]
+  );
+  return { email: TEST_ADMIN_EMAIL, password: TEST_ADMIN_PASSWORD };
+}
 
 test('T-20: signToken y verifyToken generan y validan tokens JWT estándar', () => {
   const payload = { id: 1, email: 'tarotista@lecturasdetarte.online', role: 'admin' };
@@ -86,7 +104,7 @@ test('T-20: POST /api/auth/login rechaza credenciales erróneas con 401', async 
     const res = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@empresa.com', password: 'password_invalida_999' })
+      body: JSON.stringify({ email: TEST_ADMIN_EMAIL, password: 'password_invalida_999' })
     });
 
     assert.equal(res.status, 401);
@@ -97,7 +115,8 @@ test('T-20: POST /api/auth/login rechaza credenciales erróneas con 401', async 
   }
 });
 
-test('T-20: POST /api/auth/login con admin@empresa.com y admin123 retorna 200 y Set-Cookie', async () => {
+test('T-20: POST /api/auth/login con credenciales válidas retorna 200 y Set-Cookie', async () => {
+  const { email, password } = await ensureTestAdmin();
   const app = createApp();
   const server = http.createServer(app);
   await new Promise(r => server.listen(0, r));
@@ -107,13 +126,13 @@ test('T-20: POST /api/auth/login con admin@empresa.com y admin123 retorna 200 y 
     const res = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@empresa.com', password: 'admin123' })
+      body: JSON.stringify({ email, password })
     });
 
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.success, true);
-    assert.equal(body.user.email, 'admin@empresa.com');
+    assert.equal(body.user.email, email);
     assert.equal(body.user.role, 'admin');
     assert.ok(body.token);
 
@@ -144,6 +163,7 @@ test('T-20: GET /api/auth/me sin autenticación rechaza con 401 Unauthorized', a
 });
 
 test('T-20: GET /api/auth/me con cookie de sesión válida retorna datos del usuario', async () => {
+  const { email, password } = await ensureTestAdmin();
   const app = createApp();
   const server = http.createServer(app);
   await new Promise(r => server.listen(0, r));
@@ -154,7 +174,7 @@ test('T-20: GET /api/auth/me con cookie de sesión válida retorna datos del usu
     const loginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@empresa.com', password: 'admin123' })
+      body: JSON.stringify({ email, password })
     });
     assert.equal(loginRes.status, 200);
     const setCookie = loginRes.headers.get('set-cookie');
@@ -168,7 +188,7 @@ test('T-20: GET /api/auth/me con cookie de sesión válida retorna datos del usu
 
     assert.equal(meRes.status, 200);
     const meBody = await meRes.json();
-    assert.equal(meBody.user.email, 'admin@empresa.com');
+    assert.equal(meBody.user.email, email);
     assert.equal(meBody.user.role, 'admin');
     assert.equal(meBody.user.password_hash, undefined, 'Jamás debe exponer el hash de la contraseña');
   } finally {

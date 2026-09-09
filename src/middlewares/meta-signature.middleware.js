@@ -28,16 +28,23 @@ export function verifyMetaSignature(req, res, next) {
   }
 
   const appSecret = config.meta.appSecret;
+
+  // Sin App Secret no hay forma de verificar nada: se rechaza siempre.
+  // Antes existía un atajo que dejaba pasar webhooks sin firma válida en
+  // desarrollo; se eliminó porque bastaba olvidar NODE_ENV=production para
+  // dejar la puerta abierta en el servidor (A-01).
+  if (!appSecret) {
+    console.error('🚫 [SECURITY REJECTED] Webhook rechazado: META_APP_SECRET no está configurado.');
+    return res.status(503).json({
+      success: false,
+      error: 'El servidor no tiene configurado META_APP_SECRET y no puede verificar la firma.',
+      code: 'ERR_APP_SECRET_NOT_CONFIGURED'
+    });
+  }
+
   const isValid = verifyHmacSha256(req.rawBody, signatureHeader, appSecret);
 
   if (!isValid) {
-    const isTest = Boolean(process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test' || process.argv.some(a => a.includes('test')));
-    // Si estamos en desarrollo local (no en tests automáticos) y el secret es un placeholder, permitir para pruebas de Meta
-    if (!isTest && config.isDev && (!appSecret || appSecret.includes('placeholder'))) {
-      console.warn('⚠️ [DEV WARNING] Firma HMAC de Meta no coincide con META_APP_SECRET local (placeholder). Permitido en desarrollo.');
-      return next();
-    }
-
     console.warn('🚫 [SECURITY REJECTED] Webhook rechazado: La firma criptográfica HMAC-SHA256 no coincide con el App Secret.');
     return res.status(403).json({
       success: false,

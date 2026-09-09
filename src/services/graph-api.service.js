@@ -135,7 +135,7 @@ export const graphApiService = {
           console.warn(`🚨 [META AUTH ERROR 190] Token del canal #${channel.id} (${channel.name}) ha expirado.`);
           try {
             await channelRepository.updateStatus(channel.id, 'error', 'Token expirado o revocado en Meta (Error 190)');
-            socketManager.io?.emit('channel_status_changed', { channelId: channel.id, status: 'error' });
+            socketManager.emitChannelStatus(channel.id, 'error', 'Token expirado o revocado en Meta (Error 190)');
           } catch (dbErr) {
             console.error('Error actualizando estado del canal:', dbErr);
           }

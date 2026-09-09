@@ -143,6 +143,26 @@ export const messageRepository = {
   },
 
   /**
+   * Marca un mensaje como fallido guardando el motivo, para que la interfaz
+   * pueda explicarle al operador por qué no salió (A-02).
+   *
+   * @param {number} id
+   * @param {{ code?: string, message: string }} errorDetails
+   * @returns {Promise<object|null>} El mensaje actualizado
+   */
+  async markFailed(id, errorDetails) {
+    const { rows } = await query(
+      `UPDATE messages
+       SET status = 'failed', error_details = $1::jsonb
+       WHERE id = $2
+       RETURNING id, conversation_id, channel_id, meta_message_id, direction, sender_type,
+                 sender_user_id, content_type, text, media_url, status, error_details, timestamp`,
+      [JSON.stringify(errorDetails || { message: 'Error desconocido al enviar' }), id]
+    );
+    return rows[0] || null;
+  },
+
+  /**
    * Actualiza el estado de un mensaje por su ID primario.
    * 
    * @param {number} id

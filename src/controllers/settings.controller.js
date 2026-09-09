@@ -389,14 +389,14 @@ export const settingsController = {
    */
   async createUser(req, res) {
     try {
-      const { email, password, name, role = 'agent' } = req.body;
+      const { email, password, name, role = 'agent', channelIds } = req.body;
 
       if (!email || !email.includes('@')) {
         return res.status(400).json({ error: 'Email inválido o ausente' });
       }
 
-      if (!password || password.length < 6) {
-        return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+      if (!password || password.length < 12) {
+        return res.status(400).json({ error: 'La contraseña debe tener al menos 12 caracteres' });
       }
 
       if (!name || !name.trim()) {
@@ -412,7 +412,7 @@ export const settingsController = {
         return res.status(409).json({ error: 'Ya existe un usuario con ese correo electrónico' });
       }
 
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await bcrypt.hash(password, 12);
       const newUser = await userRepository.create({
         email,
         passwordHash,
@@ -420,9 +420,83 @@ export const settingsController = {
         role
       });
 
+      // Los operadores solo ven los canales que se les asignen (A-03).
+      // Si el alta viene con canales, se aplican de una vez.
+      if (role === 'agent' && Array.isArray(channelIds)) {
+        newUser.channel_ids = await userRepository.setAssignedChannels(newUser.id, channelIds);
+      } else {
+        newUser.channel_ids = [];
+      }
+
       return res.status(201).json(newUser);
     } catch (error) {
       return res.status(500).json({ error: 'Error al registrar el usuario: ' + error.message });
+    }
+  },
+
+  /**
+   * Devuelve los canales asignados a un operador.
+   * GET /api/settings/users/:id/channels
+   */
+  async getUserChannels(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: 'ID de usuario inválido' });
+      }
+
+      const usuario = await userRepository.findById(id);
+      if (!usuario) {
+        return res.status(404).json({ error: 'Usuario no encontrado' });
+      }
+
+      const channelIds = await userRepository.getAssignedChannelIds(id);
+
+      return res.json({
+        userId: id,
+        role: usuario.role,
+        // Los administradores ven todos los canales sin necesidad de asignación.
+        seesAllChannels: usuario.role === 'admin',
+        channelIds
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al consultar los canales del usuario: ' + error.message });
+    }
+  },
+
+  /**
+   * Reemplaza los canales asignados a un operador.
+   * PUT /api/settings/users/:id/channels   body: { channelIds: [1, 2] }
+   */
+  async setUserChannels(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: 'ID de usuario inválido' });
+      }
+
+      const { channelIds } = req.body;
+      if (!Array.isArray(channelIds)) {
+        return res.status(400).json({ error: 'channelIds debe ser una lista de IDs de canal' });
+      }
+
+      const usuario = await userRepository.findById(id);
+      if (!usuario) {
+        return res.status(404).json({ error: 'Usuario no encontrado' });
+      }
+
+      const asignados = await userRepository.setAssignedChannels(id, channelIds);
+
+      return res.json({
+        success: true,
+        userId: id,
+        channelIds: asignados,
+        message: usuario.role === 'admin'
+          ? 'Guardado. Recordá que los administradores ven todos los canales igualmente.'
+          : `El operador ahora ve ${asignados.length} canal(es).`
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al asignar canales: ' + error.message });
     }
   },
 

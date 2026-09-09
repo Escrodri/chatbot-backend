@@ -129,6 +129,28 @@ test('T-24: POST /api/conversations/:id/messages inserta mensaje humano y activa
   assert.equal(conv.last_message_text, 'Hola María, soy tu tarotista. Vamos a barajar los arcanos mayores.');
 });
 
+test('T-24: un mensaje que Meta no acepta se marca como fallido, nunca como enviado (A-02)', async () => {
+  // El canal de pruebas tiene un token que Meta rechaza, así que el envío no
+  // puede prosperar. Lo que se verifica es que el sistema lo diga en vez de
+  // mostrar el mensaje como entregado.
+  const res = await fetch(`${baseUrl}/api/conversations/${testConversationId}/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${adminToken}`
+    },
+    body: JSON.stringify({ text: 'Mensaje que no debería poder entregarse' })
+  });
+
+  assert.equal(res.status, 201);
+  const data = await res.json();
+
+  assert.equal(data.delivered, false, 'La respuesta debe indicar que no se entregó');
+  assert.equal(data.message.status, 'failed', 'El mensaje NO puede quedar como enviado');
+  assert.ok(data.error, 'Debe incluir el motivo del fallo');
+  assert.ok(data.error.message, 'El motivo debe ser legible para el operador');
+});
+
 test('T-24: GET /api/conversations/:id/messages devuelve historial Keyset y resetea no leídos', async () => {
   const res = await fetch(`${baseUrl}/api/conversations/${testConversationId}/messages?limit=20`, {
     headers: { 'Authorization': `Bearer ${adminToken}` }

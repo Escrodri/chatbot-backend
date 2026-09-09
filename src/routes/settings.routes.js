@@ -25,6 +25,10 @@ settingsRouter.post('/bot', settingsController.saveBotSettings);
 settingsRouter.get('/users', settingsController.getUsers);
 settingsRouter.post('/users', settingsController.createUser);
 
+// Canales que puede ver cada operador (A-03)
+settingsRouter.get('/users/:id/channels', settingsController.getUserChannels);
+settingsRouter.put('/users/:id/channels', settingsController.setUserChannels);
+
 // Auditoría de Webhooks
 settingsRouter.get('/logs', settingsController.getLogs);
 

@@ -2,11 +2,19 @@ import http from 'http';
 import { app } from './app.js';
 import { config } from './config/index.js';
 import { socketManager } from './sockets/index.js';
+import { initDatabase } from './database/index.js';
 
 const server = http.createServer(app);
 
 // Inicializar Socket.io sobre el servidor HTTP
 socketManager.init(server);
+
+// Inicializar esquema de base de datos y administrador
+try {
+  await initDatabase();
+} catch (err) {
+  console.error('❌ Error crítico al inicializar la base de datos:', err.message);
+}
 
 // Iniciar escucha del servidor HTTP
 server.listen(config.port, () => {

@@ -1,4 +1,4 @@
-import { query } from '../database/index.js';
+import { query, pool } from '../database/index.js';
 
 /**
  * Repositorio de Usuarios: Acceso a datos exclusivo para operadores y administradores.
@@ -33,11 +33,21 @@ export const userRepository = {
 
   /**
    * Lista todos los operadores del sistema (omite password_hash por seguridad).
+   * Incluye los IDs de canales asignados para poder pintarlos en el panel.
    * @returns {Promise<Array>}
    */
   async listAll() {
     const { rows } = await query(
-      'SELECT id, email, name, role, is_active, created_at FROM users ORDER BY id ASC'
+      `SELECT
+         u.id, u.email, u.name, u.role, u.is_active, u.created_at,
+         COALESCE(
+           ARRAY_AGG(a.channel_id ORDER BY a.channel_id) FILTER (WHERE a.channel_id IS NOT NULL),
+           '{}'
+         ) AS channel_ids
+       FROM users u
+       LEFT JOIN user_channel_assignments a ON a.user_id = u.id
+       GROUP BY u.id
+       ORDER BY u.id ASC`
     );
     return rows;
   },
@@ -96,6 +106,51 @@ export const userRepository = {
       'DELETE FROM user_channel_assignments WHERE user_id = $1 AND channel_id = $2',
       [userId, channelId]
     );
+  },
+
+  /**
+   * Reemplaza por completo los canales asignados a un operador, de forma atómica.
+   * Es la operación que usa el panel de administración (A-03).
+   *
+   * @param {number} userId
+   * @param {number[]} channelIds Lista completa y definitiva de canales
+   * @returns {Promise<number[]>} Los canales que quedaron asignados
+   */
+  async setAssignedChannels(userId, channelIds = []) {
+    const limpios = [...new Set(
+      (channelIds || [])
+        .map(id => parseInt(id, 10))
+        .filter(id => Number.isInteger(id))
+    )];
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM user_channel_assignments WHERE user_id = $1', [userId]);
+
+      if (limpios.length > 0) {
+        // Solo se asignan canales que existan de verdad.
+        await client.query(
+          `INSERT INTO user_channel_assignments (user_id, channel_id)
+           SELECT $1, c.id FROM channels c WHERE c.id = ANY($2::int[])
+           ON CONFLICT (user_id, channel_id) DO NOTHING`,
+          [userId, limpios]
+        );
+      }
+
+      const { rows } = await client.query(
+        'SELECT channel_id FROM user_channel_assignments WHERE user_id = $1 ORDER BY channel_id',
+        [userId]
+      );
+
+      await client.query('COMMIT');
+      return rows.map(r => r.channel_id);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 };
 

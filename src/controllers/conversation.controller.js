@@ -105,7 +105,7 @@ export const conversationController = {
       // Reseteo atómico de mensajes no leídos al abrir el chat
       if (conv.unread_count > 0 && !beforeId) {
         await conversationRepository.resetUnreadCount(id);
-        socketManager.emitMessageStatusUpdated({
+        socketManager.emitMessageStatusUpdated(conv.channel_id, {
           conversationId: id,
           status: 'read'
         });
@@ -122,7 +122,7 @@ export const conversationController = {
   },
 
   /**
-   * Envía un mensaje como tarotista/operador humano, aplica Protocolo Handover y despacha a Meta.
+   * Envía un mensaje como operador humano, aplica Protocolo Handover y despacha a Meta.
    */
   async sendMessage(req, res) {
     try {
@@ -166,13 +166,25 @@ export const conversationController = {
       await conversationRepository.updateBotStatus(conv.id, 'handed_over', req.user.id);
       await conversationRepository.updateOutboundMessage(conv.id, text.trim());
 
-      // 3. Despacho hacia Meta Graph API v21.0
+      // 3. Despacho hacia Meta Graph API.
+      //    Un mensaje solo se marca como enviado si Meta lo aceptó de verdad (A-02).
       let metaMessageId = null;
       let sendError = null;
 
-      try {
-        const fullChannel = await channelRepository.findById(conv.channel_id);
-        if (fullChannel && fullChannel.accessToken) {
+      const fullChannel = await channelRepository.findById(conv.channel_id);
+
+      if (!fullChannel) {
+        sendError = {
+          code: 'ERR_CHANNEL_NOT_FOUND',
+          message: 'El canal de este chat ya no existe. Volvé a conectarlo en Configuración.'
+        };
+      } else if (!fullChannel.accessToken) {
+        sendError = {
+          code: 'ERR_NO_ACCESS_TOKEN',
+          message: `El canal "${fullChannel.name}" no tiene token de Meta configurado, así que el mensaje no salió.`
+        };
+      } else {
+        try {
           const sendResult = await graphApiService.sendMessage({
             channel: fullChannel,
             recipientId: conv.platform_user_id || conv.contact_phone,
@@ -180,25 +192,37 @@ export const conversationController = {
             lastCustomerInteraction: conv.last_customer_interaction
           });
           metaMessageId = sendResult?.metaMessageId || null;
+
+          if (!metaMessageId) {
+            sendError = {
+              code: 'ERR_NO_META_ID',
+              message: 'Meta aceptó la petición pero no devolvió un identificador de mensaje.'
+            };
+          }
+        } catch (graphErr) {
+          console.error('❌ [ENVÍO FALLIDO] No se pudo entregar el mensaje a Meta:', graphErr.message);
+          sendError = {
+            code: graphErr.code || 'ERR_META_SEND_FAILED',
+            message: graphErr.message || 'No se pudo entregar el mensaje a Meta.'
+          };
         }
-      } catch (graphErr) {
-        console.warn('Advertencia al despachar a Meta Graph API (modo local/simulado):', graphErr.message);
-        sendError = graphErr.message;
       }
 
-      // Actualizar estado del mensaje
-      if (metaMessageId) {
+      // 4. Reflejar en la base de datos lo que pasó de verdad
+      if (sendError) {
+        const fallido = await messageRepository.markFailed(inserted.id, sendError);
+        if (fallido) Object.assign(inserted, fallido);
+        inserted.status = 'failed';
+        inserted.error_details = sendError;
+      } else {
         await messageRepository.updateStatus(inserted.id, 'sent', metaMessageId);
         inserted.meta_message_id = metaMessageId;
         inserted.status = 'sent';
-      } else if (!sendError) {
-        await messageRepository.updateStatus(inserted.id, 'sent');
-        inserted.status = 'sent';
       }
 
-      // 4. Emitir eventos por WebSocket en tiempo real
-      socketManager.emitMessageSent(inserted);
-      socketManager.emitConversationUpdated({
+      // 5. Emitir eventos por WebSocket en tiempo real
+      socketManager.emitMessageSent(conv.channel_id, inserted);
+      socketManager.emitConversationUpdated(conv.channel_id, {
         id: conv.id,
         last_message_text: text.trim(),
         last_message_time: new Date(),
@@ -207,8 +231,9 @@ export const conversationController = {
 
       return res.status(201).json({
         success: true,
+        delivered: !sendError,
         message: inserted,
-        metaError: sendError || undefined
+        error: sendError || undefined
       });
     } catch (error) {
       return res.status(500).json({ error: 'Error al enviar mensaje: ' + error.message });
@@ -238,7 +263,7 @@ export const conversationController = {
 
       await conversationRepository.updateBotStatus(id, botStatus, req.user.id);
 
-      socketManager.emitConversationUpdated({
+      socketManager.emitConversationUpdated(conv.channel_id, {
         id,
         bot_status: botStatus
       });

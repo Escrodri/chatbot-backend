@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test"
+    "init-db": "node -e \"import('./src/database/index.js').then(m => m.initDatabase()).then(() => process.exit(0))\"",
+    "test": "node --test",
+    "set-admin-password": "node src/scripts/set-admin-password.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
