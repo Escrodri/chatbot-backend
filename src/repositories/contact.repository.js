@@ -37,6 +37,23 @@ export const contactRepository = {
       [id]
     );
     return rows[0] || null;
+  },
+
+  /**
+   * Actualiza el perfil enriquecido de un contacto (nombre, username, avatar).
+   */
+  async updateProfile(id, { name = null, phoneOrUsername = null, avatarUrl = null }) {
+    const { rows } = await query(
+      `UPDATE contacts
+       SET 
+         name = COALESCE($1, name),
+         phone_or_username = COALESCE($2, phone_or_username),
+         avatar_url = COALESCE($3, avatar_url)
+       WHERE id = $4
+       RETURNING id, channel_id, platform, platform_user_id, name, phone_or_username, avatar_url`,
+      [name ? name.trim() : null, phoneOrUsername ? phoneOrUsername.trim() : null, avatarUrl ? avatarUrl.trim() : null, id]
+    );
+    return rows[0] || null;
   }
 };
 

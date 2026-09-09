@@ -2,6 +2,7 @@ import { conversationRepository } from '../repositories/conversation.repository.
 import { messageRepository } from '../repositories/message.repository.js';
 import { channelRepository } from '../repositories/channel.repository.js';
 import { userRepository } from '../repositories/user.repository.js';
+import { contactRepository } from '../repositories/contact.repository.js';
 import { graphApiService } from '../services/graph-api.service.js';
 import { timeUtil } from '../utils/index.js';
 import { socketManager } from '../sockets/index.js';
@@ -30,6 +31,41 @@ export const conversationController = {
         offset: parseInt(offset, 10) || 0
       });
 
+      // Auto-enriquecer contactos de Facebook / Instagram sin foto o nombre real
+      const enrichTargets = conversations.filter(c =>
+        (c.platform === 'facebook' || c.platform === 'instagram') &&
+        (!c.contact_avatar || /^Usuario\s+\d+$/i.test(c.contact_name || '')) &&
+        c.platform_user_id
+      ).slice(0, 5);
+
+      if (enrichTargets.length > 0) {
+        await Promise.allSettled(
+          enrichTargets.map(async (c) => {
+            try {
+              const fullChannel = await channelRepository.findById(c.channel_id);
+              if (!fullChannel?.accessToken) return;
+              const profile = await graphApiService.fetchUserProfile({
+                platform: c.platform,
+                platformUserId: c.platform_user_id,
+                accessToken: fullChannel.accessToken
+              });
+              if (profile) {
+                await contactRepository.updateProfile(c.contact_id, {
+                  name: profile.name,
+                  phoneOrUsername: profile.username ? `@${profile.username}` : null,
+                  avatarUrl: profile.avatarUrl
+                });
+                if (profile.name) c.contact_name = profile.name;
+                if (profile.avatarUrl) c.contact_avatar = profile.avatarUrl;
+                if (profile.username) c.contact_phone = `@${profile.username}`;
+              }
+            } catch (err) {
+              // No bloqueante
+            }
+          })
+        );
+      }
+
       // Añadir cálculo en vivo de ventana de mensajería (24h/7d)
       const mapped = conversations.map(conv => ({
         ...conv,
@@ -55,6 +91,36 @@ export const conversationController = {
       const conv = await conversationRepository.findById(id);
       if (!conv) {
         return res.status(404).json({ error: 'Conversación no encontrada' });
+      }
+
+      // Auto-enriquecer si falta foto o nombre
+      if (
+        (conv.platform === 'facebook' || conv.platform === 'instagram') &&
+        (!conv.contact_avatar || /^Usuario\s+\d+$/i.test(conv.contact_name || '')) &&
+        conv.platform_user_id
+      ) {
+        try {
+          const fullChannel = await channelRepository.findById(conv.channel_id);
+          if (fullChannel?.accessToken) {
+            const profile = await graphApiService.fetchUserProfile({
+              platform: conv.platform,
+              platformUserId: conv.platform_user_id,
+              accessToken: fullChannel.accessToken
+            });
+            if (profile) {
+              await contactRepository.updateProfile(conv.contact_id, {
+                name: profile.name,
+                phoneOrUsername: profile.username ? `@${profile.username}` : null,
+                avatarUrl: profile.avatarUrl
+              });
+              if (profile.name) conv.contact_name = profile.name;
+              if (profile.avatarUrl) conv.contact_avatar = profile.avatarUrl;
+              if (profile.username) conv.contact_phone = `@${profile.username}`;
+            }
+          }
+        } catch (err) {
+          // No bloqueante
+        }
       }
 
       // Verificación IDOR

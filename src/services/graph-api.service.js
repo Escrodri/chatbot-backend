@@ -164,6 +164,53 @@ export const graphApiService = {
   },
 
   /**
+   * Obtiene el perfil público del usuario (nombre, avatar) en Facebook Messenger (PSID) o Instagram (IGSID).
+   *
+   * @param {{ platform: 'facebook'|'instagram', platformUserId: string, accessToken: string }} params
+   * @returns {Promise<{ name: string|null, avatarUrl: string|null, username: string|null }|null>}
+   */
+  async fetchUserProfile({ platform, platformUserId, accessToken }) {
+    if (!platformUserId || !accessToken) return null;
+    const apiVersion = config.meta.apiVersion || 'v26.0';
+
+    try {
+      let fields = '';
+      if (platform === 'facebook') {
+        fields = 'first_name,last_name,name,profile_pic';
+      } else if (platform === 'instagram') {
+        fields = 'name,username,profile_pic';
+      } else {
+        return null;
+      }
+
+      const url = `${META_API_BASE}/${apiVersion}/${platformUserId}?fields=${fields}&access_token=${accessToken}`;
+      const res = await fetch(url);
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        console.warn(`⚠️ [USER PROFILE WARNING] Meta Graph API para ${platform} #${platformUserId}:`, data.error?.message || `HTTP ${res.status}`);
+        return null;
+      }
+
+      let name = null;
+      if (platform === 'facebook') {
+        name = data.name || (data.first_name ? `${data.first_name} ${data.last_name || ''}`.trim() : null);
+      } else if (platform === 'instagram') {
+        name = data.name || (data.username ? `@${data.username}` : null);
+      }
+
+      return {
+        name,
+        username: data.username || null,
+        avatarUrl: data.profile_pic || null
+      };
+    } catch (err) {
+      console.warn(`⚠️ [USER PROFILE ERROR] Error consultando perfil de ${platform} #${platformUserId}:`, err.message);
+      return null;
+    }
+  },
+
+  /**
    * Helper privado para peticiones HTTP a Meta con captura de errores de Graph API y revocación de tokens.
    * @private
    */

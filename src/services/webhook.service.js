@@ -3,6 +3,7 @@ import { normalizerService } from './normalizer.service.js';
 import { socketManager } from '../sockets/index.js';
 import { botService } from './bot.service.js';
 import { mediaService } from './media.service.js';
+import { graphApiService } from './graph-api.service.js';
 
 /**
  * Servicio de Ingesta y Procesamiento de Webhooks:
@@ -98,13 +99,35 @@ export const webhookService = {
 
     // 3. Manejar mensajes entrantes o ecos (message / echo)
     if (event.eventType === 'message' || event.eventType === 'echo') {
+      let contactName = event.sender.name || `Contacto ${event.sender.id.slice(-4)}`;
+      let contactAvatar = null;
+      let phoneOrUsername = event.sender.phone || null;
+
+      // Enriquecer perfil de usuario desde Meta Graph API para Facebook e Instagram
+      const channelToken = channel.accessToken || channel.access_token;
+      if ((event.platform === 'facebook' || event.platform === 'instagram') && channelToken && event.sender.id) {
+        try {
+          const profile = await graphApiService.fetchUserProfile({
+            platform: event.platform,
+            platformUserId: event.sender.id,
+            accessToken: channelToken
+          });
+          if (profile?.name) contactName = profile.name;
+          if (profile?.avatarUrl) contactAvatar = profile.avatarUrl;
+          if (profile?.username) phoneOrUsername = `@${profile.username}`;
+        } catch (profileErr) {
+          console.warn(`⚠️ [USER PROFILE] No se pudo obtener perfil de ${event.platform} para ${event.sender.id}:`, profileErr.message);
+        }
+      }
+
       // A. Buscar o crear el contacto
       const contact = await contactRepository.findOrCreate({
         channelId: channel.id,
         platform: event.platform,
         platformUserId: event.sender.id,
-        name: event.sender.name || `Contacto ${event.sender.id.slice(-4)}`,
-        phoneOrUsername: event.sender.phone || null
+        name: contactName,
+        phoneOrUsername,
+        avatarUrl: contactAvatar
       });
 
       // B. Buscar o crear la conversación
