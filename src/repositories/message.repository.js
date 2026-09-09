@@ -34,6 +34,8 @@ export const messageRepository = {
     contentType = 'text',
     text,
     mediaUrl = null,
+    metaMediaId = null,
+    mediaMime = null,
     status = 'sent',
     errorDetails = null,
     timestamp = null
@@ -44,11 +46,11 @@ export const messageRepository = {
       `INSERT INTO messages (
          conversation_id, channel_id, meta_message_id, direction,
          sender_type, sender_user_id, content_type, text, media_url,
-         status, error_details, timestamp
+         meta_media_id, media_mime, status, error_details, timestamp
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, CURRENT_TIMESTAMP))
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, CURRENT_TIMESTAMP))
        ON CONFLICT (meta_message_id) DO NOTHING
-       RETURNING id, conversation_id, channel_id, meta_message_id, direction, sender_type, sender_user_id, content_type, text, media_url, status, error_details, timestamp`,
+       RETURNING id, conversation_id, channel_id, meta_message_id, direction, sender_type, sender_user_id, content_type, text, media_url, meta_media_id, media_mime, status, error_details, timestamp`,
       [
         conversationId,
         channelId,
@@ -59,6 +61,8 @@ export const messageRepository = {
         contentType,
         text,
         mediaUrl,
+        metaMediaId,
+        mediaMime,
         status,
         errorDetailsJson,
         timestamp
@@ -94,6 +98,7 @@ export const messageRepository = {
       SELECT 
         m.id, m.conversation_id, m.channel_id, m.meta_message_id, m.direction,
         m.sender_type, m.sender_user_id, m.content_type, m.text, m.media_url,
+        m.meta_media_id, m.media_mime,
         m.status, m.error_details, m.timestamp,
         u.name as sender_user_name
       FROM messages m
@@ -106,6 +111,24 @@ export const messageRepository = {
     const { rows } = await query(sql, params);
     // Invertir para entregar en orden cronológico ascendente a la UI
     return rows.reverse();
+  },
+
+  /**
+   * Busca un mensaje por su id, con los datos necesarios para entregar su
+   * archivo multimedia y verificar permisos.
+   *
+   * @param {number} id
+   * @returns {Promise<object|null>}
+   */
+  async findByIdWithChannel(id) {
+    const { rows } = await query(
+      `SELECT id, conversation_id, channel_id, content_type, media_url,
+              meta_media_id, media_mime, text
+       FROM messages
+       WHERE id = $1`,
+      [id]
+    );
+    return rows[0] || null;
   },
 
   /**

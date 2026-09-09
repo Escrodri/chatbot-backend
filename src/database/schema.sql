@@ -113,3 +113,13 @@ CREATE INDEX IF NOT EXISTS idx_messages_conv_cursor ON messages(conversation_id,
 CREATE INDEX IF NOT EXISTS idx_messages_meta_id ON messages(meta_message_id);
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_created ON webhook_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_payload_gin ON webhook_logs USING gin (payload_json);
+
+-- ==============================================================================
+-- Identificador del archivo en Meta.
+-- Permite volver a pedirle el archivo a Meta si la copia local se perdió
+-- (el disco de los planes gratuitos se borra en cada despliegue).
+-- ==============================================================================
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS meta_media_id VARCHAR(255);
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_mime VARCHAR(100);
+
+CREATE INDEX IF NOT EXISTS idx_messages_media ON messages(meta_media_id) WHERE meta_media_id IS NOT NULL;

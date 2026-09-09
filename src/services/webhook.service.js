@@ -147,6 +147,10 @@ export const webhookService = {
         contentType: event.message.type,
         text: event.message.text,
         mediaUrl: localMediaUrl,
+        // Guardamos el identificador del archivo en Meta para poder volver a
+        // pedírselo si la copia local desaparece (disco efímero del hosting).
+        metaMediaId: event.message.mediaId || null,
+        mediaMime: event.message.mimeType || null,
         status: 'delivered',
         timestamp: event.message.timestamp
       });
