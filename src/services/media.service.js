@@ -56,10 +56,37 @@ export const mediaService = {
   },
 
   /**
-   * Convierte un archivo de audio WebM a OGG con códec Opus usando FFmpeg.
-   * WhatsApp y Meta exigen que las notas de voz sean OGG codificadas con Opus mono.
+   * ¿Este archivo es un audio que hay que reconvertir antes de mandarlo a Meta?
+   *
+   * Pasan derecho solo los formatos que Meta reconoce y que no salen de una
+   * grabación del navegador. Todo lo demás se reconvierte, porque Meta mira el
+   * contenido real del archivo y no lo que uno le declara.
+   *
+   * @param {string} ext Extensión con punto, en minúsculas
+   * @param {string} mime Tipo MIME sin parámetros, en minúsculas
+   * @returns {boolean}
    */
-  async convertWebmToOggOpus(inputPath, outputPath) {
+  necesitaConversionDeAudio(ext = '', mime = '') {
+    const YA_SIRVEN = ['.ogg', '.opus', '.mp3', '.amr', '.aac'];
+    const EXTENSIONES_DE_AUDIO = ['.webm', '.m4a', '.mp4', '.wav', '.ogg', '.opus', '.mp3', '.aac', '.amr'];
+
+    const esAudio = String(mime).startsWith('audio/') || EXTENSIONES_DE_AUDIO.includes(ext);
+    return esAudio && !YA_SIRVEN.includes(ext);
+  },
+
+  /**
+   * Convierte cualquier audio a OGG con códec Opus mono usando FFmpeg.
+   *
+   * Meta acepta muy pocos formatos para notas de voz y, sobre todo, verifica el
+   * contenido real del archivo, no lo que uno le declara. Lo que graba el
+   * navegador —WebM en Chrome, MP4 en Safari y en el iPhone— sale como un
+   * archivo pensado para reproducirse mientras se graba, y al procesarlo Meta
+   * no lo reconoce: responde que es "application/octet-stream" y lo rechaza.
+   *
+   * Por eso se reconvierte todo a Ogg Opus, que es el formato nativo de las
+   * notas de voz de WhatsApp, en vez de confiar en lo que mandó el navegador.
+   */
+  async convertirAudioAOggOpus(inputPath, outputPath) {
     return new Promise((resolve, reject) => {
       try {
         if (process.platform !== 'win32' && ffmpeg.path && fs.existsSync(ffmpeg.path)) {
@@ -118,24 +145,33 @@ export const mediaService = {
 
     fs.writeFileSync(filePath, buffer);
 
-    // Si es un audio grabado en .webm (formato estándar de MediaRecorder en Chrome/Edge),
-    // lo convertimos a .ogg con códec Opus para cumplir con la especificación estricta de Meta
-    // para notas de voz en WhatsApp Cloud API, Messenger e Instagram Direct.
-    if (ext === '.webm' || cleanMime === 'audio/webm') {
+    // Toda nota de voz se reconvierte a Ogg Opus antes de salir.
+    //
+    // No alcanza con mirar si es WebM: Safari y el iPhone graban en MP4, y ese
+    // MP4 de grabación en vivo tampoco lo acepta Meta —dice que al procesarlo
+    // le da "application/octet-stream"—. Los únicos que pasan derecho son los
+    // formatos que Meta ya reconoce y que no vienen de una grabación del
+    // navegador.
+    if (this.necesitaConversionDeAudio(ext, cleanMime)) {
       try {
         const convertedFileName = `${Date.now()}_${fileHash}.ogg`;
         const convertedFilePath = path.join(UPLOADS_DIR, convertedFileName);
-        await this.convertWebmToOggOpus(filePath, convertedFilePath);
-        
+        await this.convertirAudioAOggOpus(filePath, convertedFilePath);
+
         try { fs.unlinkSync(filePath); } catch {}
+
+        console.log(`🎙️ [AUDIO] Nota de voz convertida de ${ext || cleanMime} a Ogg Opus.`);
 
         finalFileName = convertedFileName;
         filePath = convertedFilePath;
         ext = '.ogg';
         cleanMime = 'audio/ogg';
-        fileName = (fileName || 'nota_de_voz').replace(/\.webm$/i, '') + '.ogg';
+        fileName = (fileName || 'nota_de_voz').replace(/\.[a-z0-9]+$/i, '') + '.ogg';
       } catch (convErr) {
-        console.warn('⚠️ [AUDIO TRANSCODE WARNING] No se pudo convertir WebM a Ogg Opus:', convErr.message);
+        console.error(
+          `❌ [AUDIO] No se pudo convertir la nota de voz a Ogg Opus: ${convErr.message}. ` +
+          'Meta va a rechazar el envío.'
+        );
       }
     }
 

@@ -106,7 +106,11 @@ export const graphApiService = {
         const resolvedPath = localFilePath || mediaService.resolveLocalPath(mediaUrl);
         if (resolvedPath && fs.existsSync(resolvedPath)) {
           try {
-            const uploadMime = mimeType || (type === 'audio' ? 'audio/ogg' : 'application/octet-stream');
+            // Meta exige el códec explícito para las notas de voz.
+            let uploadMime = mimeType || (type === 'audio' ? 'audio/ogg' : 'application/octet-stream');
+            if (type === 'audio' && uploadMime.startsWith('audio/ogg')) {
+              uploadMime = 'audio/ogg; codecs=opus';
+            }
             mediaId = await this.uploadMediaToWhatsApp({
               channel,
               accessToken,
@@ -116,6 +120,19 @@ export const graphApiService = {
           } catch (uploadErr) {
             console.warn('⚠️ [WHATSAPP DIRECT UPLOAD FALLBACK] No se pudo subir directo a Meta, probando por enlace:', uploadErr.message);
           }
+        }
+
+        // Para el audio no sirve mandar un enlace: el almacenamiento externo
+        // sirve los audios como si fueran video, y Meta rechaza el envío con
+        // "Unsupported Audio mime type video/mp4". Si la subida directa falló,
+        // conviene decirlo claro antes que mandar algo que sabemos que se cae.
+        if (type === 'audio' && !mediaId) {
+          const err = new Error(
+            'No se pudo subir la nota de voz a Meta. Probá de nuevo; si sigue fallando, ' +
+            'puede que el servidor no haya podido convertir el audio.'
+          );
+          err.code = 'ERR_AUDIO_UPLOAD_FAILED';
+          throw err;
         }
 
         payload = {
