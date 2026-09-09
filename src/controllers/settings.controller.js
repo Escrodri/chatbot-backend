@@ -407,11 +407,11 @@ export const settingsController = {
     // 4. Cruzar con los canales ya existentes para no duplicar
     const scannedPages = await Promise.all(
       rawPages.map(async (page) => {
-        const existingFb = await channelRepository.findByIdentifier(page.id);
+        const existingFb = await channelRepository.findAnyByIdentifier(page.id);
         let existingIg = null;
 
         if (page.instagram_business_account?.id) {
-          existingIg = await channelRepository.findByIdentifier(page.instagram_business_account.id);
+          existingIg = await channelRepository.findAnyByIdentifier(page.instagram_business_account.id);
         }
 
         return {
@@ -419,14 +419,14 @@ export const settingsController = {
           name: page.name,
           category: page.category || 'Página de Facebook',
           accessToken: page.access_token,
-          alreadyConnected: Boolean(existingFb),
-          existingChannelId: existingFb?.id || null,
+          alreadyConnected: Boolean(existingFb && !existingFb.deleted_at),
+          existingChannelId: (existingFb && !existingFb.deleted_at) ? existingFb.id : null,
           instagram: page.instagram_business_account ? {
             id: page.instagram_business_account.id,
             username: page.instagram_business_account.username,
             name: page.instagram_business_account.name || null,
-            alreadyConnected: Boolean(existingIg),
-            existingChannelId: existingIg?.id || null
+            alreadyConnected: Boolean(existingIg && !existingIg.deleted_at),
+            existingChannelId: (existingIg && !existingIg.deleted_at) ? existingIg.id : null
           } : null
         };
       })
@@ -480,17 +480,28 @@ export const settingsController = {
           console.warn(`⚠️ [PAGE SUBSCRIBE ERROR] No se pudo suscribir webhook para #${p.id}:`, subErr.message);
         }
 
-        // B. Crear o actualizar canal de Facebook en la base de datos
-        const existingFb = await channelRepository.findByIdentifier(p.id);
+        // B. Crear, actualizar o restaurar canal de Facebook en la base de datos
+        const existingFb = await channelRepository.findAnyByIdentifier(p.id);
         let fbChannel;
         if (existingFb) {
-          fbChannel = await channelRepository.update(existingFb.id, {
-            name: p.name || existingFb.name,
-            accessToken: p.accessToken,
-            appId: finalAppId,
-            appSecret: finalAppSecret,
-            status: 'active'
-          });
+          if (existingFb.deleted_at) {
+            // Canal previamente borrado (soft-delete): restaurar y reactivar con todo su historial preservado
+            fbChannel = await channelRepository.restoreAndReactivate(existingFb.id, {
+              name: p.name || existingFb.name,
+              accessToken: p.accessToken,
+              appId: finalAppId,
+              appSecret: finalAppSecret,
+              colorTag: existingFb.color_tag || '#1877F2'
+            });
+          } else {
+            fbChannel = await channelRepository.update(existingFb.id, {
+              name: p.name || existingFb.name,
+              accessToken: p.accessToken,
+              appId: finalAppId,
+              appSecret: finalAppSecret,
+              status: 'active'
+            });
+          }
         } else {
           fbChannel = await channelRepository.create({
             platform: 'facebook',
@@ -508,16 +519,27 @@ export const settingsController = {
         if (p.connectInstagram && p.instagram?.id) {
           const igId = p.instagram.id;
           const igUsername = p.instagram.username || p.name;
-          const existingIg = await channelRepository.findByIdentifier(igId);
+          const existingIg = await channelRepository.findAnyByIdentifier(igId);
           let igChannel;
           if (existingIg) {
-            igChannel = await channelRepository.update(existingIg.id, {
-              name: `Instagram @${igUsername}`,
-              accessToken: p.accessToken,
-              appId: finalAppId,
-              appSecret: finalAppSecret,
-              status: 'active'
-            });
+            if (existingIg.deleted_at) {
+              // Cuenta de Instagram previamente borrada: restaurar y reactivar conservando sus chats
+              igChannel = await channelRepository.restoreAndReactivate(existingIg.id, {
+                name: `Instagram @${igUsername}`,
+                accessToken: p.accessToken,
+                appId: finalAppId,
+                appSecret: finalAppSecret,
+                colorTag: existingIg.color_tag || '#E1306C'
+              });
+            } else {
+              igChannel = await channelRepository.update(existingIg.id, {
+                name: `Instagram @${igUsername}`,
+                accessToken: p.accessToken,
+                appId: finalAppId,
+                appSecret: finalAppSecret,
+                status: 'active'
+              });
+            }
           } else {
             igChannel = await channelRepository.create({
               platform: 'instagram',
