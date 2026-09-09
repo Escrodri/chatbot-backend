@@ -104,6 +104,15 @@ export const envConfig = Object.freeze({
     verifyToken: (process.env.META_VERIFY_TOKEN || '').trim(),
     loginConfigId: (process.env.META_LOGIN_CONFIG_ID || '').trim(),
     apiVersion: (process.env.META_API_VERSION || 'v26.0').trim(),
+  },
+
+  // Almacenamiento externo de archivos (opcional).
+  // Si no se configura, los archivos se guardan solo en el disco del servidor.
+  cloudinary: {
+    cloudName: (process.env.CLOUDINARY_CLOUD_NAME || '').trim(),
+    apiKey: (process.env.CLOUDINARY_API_KEY || '').trim(),
+    apiSecret: (process.env.CLOUDINARY_API_SECRET || '').trim(),
+    folder: (process.env.CLOUDINARY_FOLDER || 'bandeja-unificada').trim(),
   }
 });
 

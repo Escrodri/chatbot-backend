@@ -161,6 +161,13 @@ export const conversationController = {
         }
       }
 
+      // Copia en el almacenamiento externo, si está configurado: así el archivo
+      // sobrevive a los despliegues y Meta puede descargarlo por una dirección
+      // pública y estable en vez de por el disco efímero del servidor.
+      if (savedMedia) {
+        savedMedia = await mediaService.respaldar(savedMedia);
+      }
+
       const contentType = savedMedia ? savedMedia.contentType : 'text';
       const mediaUrl = savedMedia ? savedMedia.localUrl : null;
       const messageText = (text || (savedMedia ? `[Archivo: ${savedMedia.fileName}]` : '')).trim();
@@ -242,7 +249,7 @@ export const conversationController = {
       socketManager.emitMessageSent(conv.channel_id, inserted);
       socketManager.emitConversationUpdated(conv.channel_id, {
         id: conv.id,
-        last_message_text: text.trim(),
+        last_message_text: messageText,
         last_message_time: new Date(),
         bot_status: 'handed_over'
       });
@@ -255,6 +262,109 @@ export const conversationController = {
       });
     } catch (error) {
       return res.status(500).json({ error: 'Error al enviar mensaje: ' + error.message });
+    }
+  },
+
+  /**
+   * Reintenta el envío de un mensaje que Meta rechazó.
+   *
+   * Vuelve a despachar el mensaje que ya está guardado, con su adjunto incluido.
+   * Antes el botón "Reintentar" del chat mandaba un mensaje nuevo con solo el
+   * texto, así que el archivo se perdía y llegaba únicamente su nombre.
+   */
+  async retryMessage(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const messageId = parseInt(req.params.messageId, 10);
+
+      if (isNaN(id) || isNaN(messageId)) {
+        return res.status(400).json({ error: 'Identificadores inválidos' });
+      }
+
+      const conv = await conversationRepository.findById(id);
+      if (!conv) {
+        return res.status(404).json({ error: 'Conversación no encontrada' });
+      }
+
+      // Verificación IDOR: un operador solo actúa sobre sus canales.
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
+      }
+
+      const mensaje = await messageRepository.findByIdWithChannel(messageId);
+      if (!mensaje || mensaje.conversation_id !== conv.id) {
+        return res.status(404).json({ error: 'Mensaje no encontrado en esta conversación' });
+      }
+
+      if (mensaje.direction !== 'outbound') {
+        return res.status(400).json({ error: 'Solo se pueden reintentar mensajes salientes' });
+      }
+
+      if (mensaje.status !== 'failed') {
+        return res.status(409).json({ error: 'Este mensaje no está marcado como fallido' });
+      }
+
+      const fullChannel = await channelRepository.findById(conv.channel_id);
+      if (!fullChannel?.accessToken) {
+        return res.status(409).json({
+          error: 'El canal de este chat no tiene un token de Meta válido. Volvé a conectarlo en Configuración.',
+          code: 'ERR_NO_ACCESS_TOKEN'
+        });
+      }
+
+      // El texto guardado puede ser el marcador "[Archivo: nombre]" que pusimos
+      // nosotros; en ese caso no es un pie de foto real y no se reenvía como texto.
+      const marcador = /^\[Archivo:\s*(.+)\]$/.exec((mensaje.text || '').trim());
+      const nombreArchivo = marcador ? marcador[1].trim() : null;
+      const textoReal = marcador ? '' : (mensaje.text || '');
+
+      let metaMessageId = null;
+      let sendError = null;
+
+      try {
+        const sendResult = await graphApiService.sendMessage({
+          channel: fullChannel,
+          recipientId: conv.platform_user_id || conv.contact_phone,
+          text: textoReal,
+          mediaUrl: mensaje.media_url || null,
+          contentType: mensaje.content_type || 'text',
+          fileName: nombreArchivo,
+          lastCustomerInteraction: conv.last_customer_interaction
+        });
+        metaMessageId = sendResult?.metaMessageId || null;
+
+        if (!metaMessageId) {
+          sendError = {
+            code: 'ERR_NO_META_ID',
+            message: 'Meta aceptó la petición pero no devolvió un identificador de mensaje.'
+          };
+        }
+      } catch (graphErr) {
+        console.error('❌ [REINTENTO FALLIDO]', graphErr.message);
+        sendError = {
+          code: graphErr.code || 'ERR_META_SEND_FAILED',
+          message: graphErr.message || 'No se pudo entregar el mensaje a Meta.'
+        };
+      }
+
+      if (sendError) {
+        await messageRepository.markFailed(messageId, sendError);
+        return res.status(200).json({ success: true, delivered: false, error: sendError });
+      }
+
+      await messageRepository.updateStatus(messageId, 'sent', metaMessageId);
+      socketManager.emitMessageStatus(conv.channel_id, metaMessageId, 'sent');
+
+      return res.json({
+        success: true,
+        delivered: true,
+        message: { ...mensaje, status: 'sent', meta_message_id: metaMessageId, error_details: null }
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al reintentar el envío: ' + error.message });
     }
   },
 

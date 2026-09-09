@@ -47,10 +47,14 @@ export const authController = {
       const token = signToken(userPayload, config.security.sessionSecret, 86400);
 
       // Establecer Cookie HTTP-Only protegida
+      // El sitio y la API viven en dominios distintos (Cloudflare y Render), así
+      // que la cookie tiene que ser de tipo "none" para que el navegador la mande.
+      // Sin esto las imágenes del chat, que se piden con una etiqueta <img> y no
+      // pueden llevar cabecera de autorización, responderían 401.
       res.cookie('session_token', token, {
         httpOnly: true,
         secure: config.isProd,
-        sameSite: 'lax',
+        sameSite: config.isProd ? 'none' : 'lax',
         maxAge: 24 * 60 * 60 * 1000 // 24h
       });
 
@@ -69,10 +73,11 @@ export const authController = {
    * POST /api/auth/logout
    */
   async logout(req, res) {
+    // Los atributos deben coincidir con los del alta, o el navegador no la borra.
     res.clearCookie('session_token', {
       httpOnly: true,
       secure: config.isProd,
-      sameSite: 'lax'
+      sameSite: config.isProd ? 'none' : 'lax'
     });
 
     return res.status(200).json({

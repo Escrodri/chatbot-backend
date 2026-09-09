@@ -32,6 +32,10 @@ export const mediaController = {
    */
   async serve(req, res) {
     try {
+      // El navegador pide estos archivos desde otro dominio con una etiqueta
+      // <img>, así que hay que permitir explícitamente el uso cruzado.
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
       const messageId = parseInt(req.params.messageId, 10);
       if (isNaN(messageId)) {
         return res.status(400).json({ error: 'Identificador de mensaje inválido' });
@@ -48,6 +52,12 @@ export const mediaController = {
         if (!asignados.includes(mensaje.channel_id)) {
           return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
         }
+      }
+
+      // 0. Si el archivo vive en un almacenamiento externo, se redirige ahí.
+      const guardado = mensaje.media_url || '';
+      if (guardado.startsWith('http://') || guardado.startsWith('https://')) {
+        return res.redirect(302, guardado);
       }
 
       // 1. ¿Está en la caché local?

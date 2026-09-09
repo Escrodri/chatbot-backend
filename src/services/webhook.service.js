@@ -129,8 +129,11 @@ export const webhookService = {
             directUrl: event.message.mediaDirectUrl,
             mimeType: event.message.mimeType
           });
-          if (mediaResult?.localUrl) {
-            localMediaUrl = mediaResult.localUrl;
+          // Copia en el almacenamiento externo, si está configurado, para que la
+          // foto siga viéndose después de un despliegue.
+          const respaldado = await mediaService.respaldar(mediaResult);
+          if (respaldado?.localUrl) {
+            localMediaUrl = respaldado.localUrl;
           }
         } catch (mediaErr) {
           console.warn(`⚠️ [MEDIA DOWNLOAD ERROR] No se pudo descargar medio ${event.message.mediaId}:`, mediaErr.message);

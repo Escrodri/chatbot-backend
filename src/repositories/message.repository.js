@@ -123,7 +123,7 @@ export const messageRepository = {
   async findByIdWithChannel(id) {
     const { rows } = await query(
       `SELECT id, conversation_id, channel_id, content_type, media_url,
-              meta_media_id, media_mime, text
+              meta_media_id, media_mime, text, direction, status, sender_type
        FROM messages
        WHERE id = $1`,
       [id]
@@ -194,15 +194,25 @@ export const messageRepository = {
    * @returns {Promise<void>}
    */
   async updateStatus(id, status, metaMessageId = null) {
+    // Si el mensaje deja de estar fallido (por ejemplo tras un reintento exitoso),
+    // se borra el motivo del error para que el chat no siga mostrando el aviso.
+    const limpiarError = status !== 'failed';
+
     if (metaMessageId) {
       await query(
-        `UPDATE messages SET status = $1, meta_message_id = $2 WHERE id = $3`,
-        [status, metaMessageId, id]
+        `UPDATE messages
+         SET status = $1, meta_message_id = $2,
+             error_details = CASE WHEN $4::boolean THEN NULL ELSE error_details END
+         WHERE id = $3`,
+        [status, metaMessageId, id, limpiarError]
       );
     } else {
       await query(
-        `UPDATE messages SET status = $1 WHERE id = $2`,
-        [status, id]
+        `UPDATE messages
+         SET status = $1,
+             error_details = CASE WHEN $3::boolean THEN NULL ELSE error_details END
+         WHERE id = $2`,
+        [status, id, limpiarError]
       );
     }
   }

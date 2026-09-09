@@ -9,7 +9,8 @@
     "dev": "node --watch src/server.js",
     "init-db": "node -e \"import('./src/database/index.js').then(m => m.initDatabase()).then(() => process.exit(0))\"",
     "test": "node --test",
-    "set-admin-password": "node src/scripts/set-admin-password.js"
+    "set-admin-password": "node src/scripts/set-admin-password.js",
+    "probar-cloudinary": "node src/scripts/probar-cloudinary.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

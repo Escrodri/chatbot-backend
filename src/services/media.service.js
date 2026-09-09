@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { config } from '../config/index.js';
+import { storageService } from './storage.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -85,6 +86,39 @@ export const mediaService = {
       fileSize: buffer.length,
       contentType,
       fileName: fileName || finalFileName
+    };
+  },
+
+  /**
+   * Sube una copia del archivo al almacenamiento externo, si está configurado.
+   *
+   * Devuelve el mismo objeto pero con `localUrl` apuntando a la dirección
+   * pública, que es la que se guarda en la base de datos. Así el archivo
+   * sobrevive a los despliegues y Meta puede descargarlo cuando lo enviamos.
+   *
+   * Si no hay almacenamiento externo o la subida falla, devuelve el objeto tal
+   * cual y todo sigue funcionando contra el disco local.
+   *
+   * @param {object|null} guardado Resultado de saveBase64Media o downloadMedia
+   * @returns {Promise<object|null>}
+   */
+  async respaldar(guardado) {
+    if (!guardado?.filePath) return guardado;
+
+    const remoto = await storageService.subirArchivo({
+      filePath: guardado.filePath,
+      mimeType: guardado.mimeType,
+      fileName: guardado.fileName
+    });
+
+    if (!remoto) return guardado;
+
+    return {
+      ...guardado,
+      localUrl: remoto.url,
+      rutaLocal: guardado.localUrl,
+      remoteUrl: remoto.url,
+      publicId: remoto.publicId
     };
   },
 

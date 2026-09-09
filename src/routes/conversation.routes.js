@@ -19,6 +19,9 @@ conversationRouter.get('/:id/messages', conversationController.getMessages);
 // Envío de respuesta humana (Handover)
 conversationRouter.post('/:id/messages', conversationController.sendMessage);
 
+// Reintentar el envío de un mensaje que Meta rechazó (conserva el adjunto)
+conversationRouter.post('/:id/messages/:messageId/retry', conversationController.retryMessage);
+
 // Alternar estado del bot (active, handed_over, disabled)
 conversationRouter.post('/:id/bot-toggle', conversationController.toggleBot);
 
