@@ -6,11 +6,32 @@ const { Pool } = pg;
 /**
  * Pool de conexiones PostgreSQL configurado para alta concurrencia y resiliencia.
  */
+/**
+ * Decide si la conexión debe usar TLS.
+ *
+ * Las bases administradas (Render, Railway, Neon, Supabase) exigen SSL y presentan
+ * certificados que Node no reconoce sin el CA de cada proveedor, de ahí
+ * rejectUnauthorized: false. En local, contra el Postgres de Docker, no se usa SSL.
+ *
+ * Se puede forzar con DATABASE_SSL=true / DATABASE_SSL=false.
+ */
+function resolveSsl() {
+  const forzado = (process.env.DATABASE_SSL || '').trim().toLowerCase();
+  if (forzado === 'false' || forzado === '0') return false;
+  if (forzado === 'true' || forzado === '1') return { rejectUnauthorized: false };
+
+  const url = config.database.url || '';
+  const esLocal = /@(localhost|127\.0\.0\.1|\[::1\]|postgres|db)(:|\/)/.test(url);
+
+  return esLocal ? false : { rejectUnauthorized: false };
+}
+
 export const pool = new Pool({
   connectionString: config.database.url,
+  ssl: resolveSsl(),
   max: 20,                       // Hasta 20 conexiones concurrentes para ráfagas de webhooks
   idleTimeoutMillis: 30000,      // Cierra clientes inactivos tras 30 segundos
-  connectionTimeoutMillis: 5000, // Timeout de conexión de 5 segundos
+  connectionTimeoutMillis: 10000, // 10 s: las bases administradas tardan más en aceptar
 });
 
 pool.on('error', (err) => {
