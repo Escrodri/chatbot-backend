@@ -108,13 +108,68 @@ export const channelRepository = {
   },
 
   /**
+   * Inserta o actualiza un canal de manera atómica (UPSERT idempotente).
+   * Si el channel_identifier ya existe (activo o archivado), actualiza credenciales y reactiva el canal
+   * preservando el historial de conversaciones, mensajes y asignaciones.
+   * Evita 'duplicate key value violates unique constraint "channels_channel_identifier_key"'.
+   * 
+   * @param {{ platform: string, name: string, channelIdentifier: string, appId?: string, appSecret?: string, accessToken: string, colorTag?: string, status?: string }} data
+   * @returns {Promise<object>}
+   */
+  async upsert({ platform, name, channelIdentifier, appId = null, appSecret = null, accessToken, colorTag = '#25D366', status = 'active' }) {
+    const encryptedToken = encryptSecret(accessToken.trim());
+    let encryptedSecretJson = null;
+    if (appSecret) {
+      const encryptedAppSecret = encryptSecret(appSecret.trim());
+      encryptedSecretJson = JSON.stringify(encryptedAppSecret);
+    }
+
+    const { rows } = await query(
+      `INSERT INTO channels (
+         platform, name, channel_identifier, app_id, 
+         app_secret_encrypted, access_token_encrypted, token_iv, token_tag, color_tag,
+         status, error_message, deleted_at, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL, CURRENT_TIMESTAMP)
+       ON CONFLICT (channel_identifier) DO UPDATE SET
+         platform = EXCLUDED.platform,
+         name = EXCLUDED.name,
+         app_id = COALESCE(EXCLUDED.app_id, channels.app_id),
+         app_secret_encrypted = COALESCE(EXCLUDED.app_secret_encrypted, channels.app_secret_encrypted),
+         access_token_encrypted = EXCLUDED.access_token_encrypted,
+         token_iv = EXCLUDED.token_iv,
+         token_tag = EXCLUDED.token_tag,
+         color_tag = COALESCE(EXCLUDED.color_tag, channels.color_tag),
+         status = EXCLUDED.status,
+         error_message = NULL,
+         deleted_at = NULL,
+         updated_at = CURRENT_TIMESTAMP
+       RETURNING id, platform, name, channel_identifier, app_id, color_tag, status, created_at, updated_at`,
+      [
+        platform,
+        name.trim(),
+        channelIdentifier.trim(),
+        appId ? appId.trim() : null,
+        encryptedSecretJson,
+        encryptedToken.cipherText,
+        encryptedToken.iv,
+        encryptedToken.tag,
+        colorTag,
+        status
+      ]
+    );
+
+    return rows[0];
+  },
+
+  /**
    * Actualiza los datos de un canal (nombre, color, estado, y opcionalmente nuevo token).
    * 
    * @param {number} id 
-   * @param {{ name?: string, colorTag?: string, status?: 'active'|'error'|'paused', accessToken?: string }} data 
+   * @param {{ name?: string, channelIdentifier?: string, colorTag?: string, status?: 'active'|'error'|'paused', accessToken?: string, appId?: string, appSecret?: string }} data 
    * @returns {Promise<object|null>}
    */
-  async update(id, { name, colorTag, status, accessToken } = {}) {
+  async update(id, { name, channelIdentifier, colorTag, status, accessToken, appId, appSecret } = {}) {
     const fields = [];
     const values = [];
     let idx = 1;
@@ -126,6 +181,19 @@ export const channelRepository = {
     if (channelIdentifier !== undefined && channelIdentifier.trim()) {
       fields.push(`channel_identifier = $${idx++}`);
       values.push(channelIdentifier.trim());
+    }
+    if (appId !== undefined) {
+      fields.push(`app_id = $${idx++}`);
+      values.push(appId ? appId.trim() : null);
+    }
+    if (appSecret !== undefined) {
+      let encryptedSecretJson = null;
+      if (appSecret && appSecret.trim()) {
+        const encryptedAppSecret = encryptSecret(appSecret.trim());
+        encryptedSecretJson = JSON.stringify(encryptedAppSecret);
+      }
+      fields.push(`app_secret_encrypted = $${idx++}`);
+      values.push(encryptedSecretJson);
     }
     if (colorTag !== undefined) {
       fields.push(`color_tag = $${idx++}`);

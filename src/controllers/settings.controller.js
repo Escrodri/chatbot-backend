@@ -404,9 +404,20 @@ export const settingsController = {
 
     const rawPages = accountsData.data || [];
 
+    // Deduplicar páginas devueltas por Meta (en caso de que el usuario tenga roles duplicados por Business Manager)
+    const uniqueRawPages = [];
+    const seenScanIds = new Set();
+    for (const page of rawPages) {
+      const pageId = String(page.id || '').trim();
+      if (pageId && !seenScanIds.has(pageId)) {
+        seenScanIds.add(pageId);
+        uniqueRawPages.push(page);
+      }
+    }
+
     // 4. Cruzar con los canales ya existentes para no duplicar
     const scannedPages = await Promise.all(
-      rawPages.map(async (page) => {
+      uniqueRawPages.map(async (page) => {
         const existingFb = await channelRepository.findAnyByIdentifier(page.id);
         let existingIg = null;
 
@@ -447,6 +458,7 @@ export const settingsController = {
 
   /**
    * Conecta y suscribe automáticamente una o varias Fan Pages seleccionadas como canales del CRM.
+   * Utiliza UPSERT atómico idempotente para evitar colisiones de clave única ('channels_channel_identifier_key').
    */
   async connectFacebookPages(req, res) {
     try {
@@ -458,100 +470,74 @@ export const settingsController = {
         return res.status(400).json({ error: 'Debes seleccionar al menos una página para conectar.' });
       }
 
-      const connectedChannels = [];
-
+      // 1. Deduplicar páginas recibidas por ID para evitar procesamiento duplicado o concurrente
+      const uniquePages = [];
+      const seenPageIds = new Set();
       for (const p of pages) {
-        if (!p.id || !p.accessToken) continue;
+        const pId = String(p.id || '').trim();
+        if (pId && !seenPageIds.has(pId)) {
+          seenPageIds.add(pId);
+          uniquePages.push(p);
+        }
+      }
+
+      const connectedChannels = [];
+      const processedIgIds = new Set();
+
+      for (const p of uniquePages) {
+        const pageId = String(p.id || '').trim();
+        if (!pageId || !p.accessToken) continue;
 
         // A. Suscribir la página a los eventos de Webhook de la aplicación
         try {
           const apiVersion = envConfig.meta.apiVersion || 'v26.0';
           const subRes = await fetch(
-            `https://graph.facebook.com/${apiVersion}/${p.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${p.accessToken}`,
+            `https://graph.facebook.com/${apiVersion}/${pageId}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${p.accessToken}`,
             { method: 'POST' }
           );
           const subData = await subRes.json();
           if (subData.success) {
-            console.log(`✅ [PAGE SUBSCRIBED] Página "${p.name}" (#${p.id}) suscrita al webhook.`);
+            console.log(`✅ [PAGE SUBSCRIBED] Página "${p.name}" (#${pageId}) suscrita al webhook.`);
           } else {
-            console.warn(`⚠️ [PAGE SUBSCRIBE WARNING] Respuesta de suscripción para #${p.id}:`, subData);
+            console.warn(`⚠️ [PAGE SUBSCRIBE WARNING] Respuesta de suscripción para #${pageId}:`, subData);
           }
         } catch (subErr) {
-          console.warn(`⚠️ [PAGE SUBSCRIBE ERROR] No se pudo suscribir webhook para #${p.id}:`, subErr.message);
+          console.warn(`⚠️ [PAGE SUBSCRIBE ERROR] No se pudo suscribir webhook para #${pageId}:`, subErr.message);
         }
 
-        // B. Crear, actualizar o restaurar canal de Facebook en la base de datos
-        const existingFb = await channelRepository.findAnyByIdentifier(p.id);
-        let fbChannel;
-        if (existingFb) {
-          if (existingFb.deleted_at) {
-            // Canal previamente borrado (soft-delete): restaurar y reactivar con todo su historial preservado
-            fbChannel = await channelRepository.restoreAndReactivate(existingFb.id, {
-              name: p.name || existingFb.name,
-              accessToken: p.accessToken,
-              appId: finalAppId,
-              appSecret: finalAppSecret,
-              colorTag: existingFb.color_tag || '#1877F2'
-            });
-          } else {
-            fbChannel = await channelRepository.update(existingFb.id, {
-              name: p.name || existingFb.name,
-              accessToken: p.accessToken,
-              appId: finalAppId,
-              appSecret: finalAppSecret,
-              status: 'active'
-            });
-          }
-        } else {
-          fbChannel = await channelRepository.create({
-            platform: 'facebook',
-            name: p.name || `Facebook Page ${p.id}`,
-            channelIdentifier: p.id,
-            accessToken: p.accessToken,
-            appId: finalAppId,
-            appSecret: finalAppSecret,
-            colorTag: '#1877F2'
-          });
-        }
+        // B. Upsert atómico del canal de Facebook (idempotente: crea, actualiza o reactiva sin errores de duplicación)
+        const fbChannel = await channelRepository.upsert({
+          platform: 'facebook',
+          name: p.name || `Facebook Page ${pageId}`,
+          channelIdentifier: pageId,
+          accessToken: p.accessToken,
+          appId: finalAppId,
+          appSecret: finalAppSecret,
+          colorTag: '#1877F2',
+          status: 'active'
+        });
         connectedChannels.push(fbChannel);
 
         // C. Si se solicitó conectar Instagram y la página tiene cuenta vinculada
         if (p.connectInstagram && p.instagram?.id) {
-          const igId = p.instagram.id;
+          const igId = String(p.instagram.id).trim();
           const igUsername = p.instagram.username || p.name;
-          const existingIg = await channelRepository.findAnyByIdentifier(igId);
-          let igChannel;
-          if (existingIg) {
-            if (existingIg.deleted_at) {
-              // Cuenta de Instagram previamente borrada: restaurar y reactivar conservando sus chats
-              igChannel = await channelRepository.restoreAndReactivate(existingIg.id, {
-                name: `Instagram @${igUsername}`,
-                accessToken: p.accessToken,
-                appId: finalAppId,
-                appSecret: finalAppSecret,
-                colorTag: existingIg.color_tag || '#E1306C'
-              });
-            } else {
-              igChannel = await channelRepository.update(existingIg.id, {
-                name: `Instagram @${igUsername}`,
-                accessToken: p.accessToken,
-                appId: finalAppId,
-                appSecret: finalAppSecret,
-                status: 'active'
-              });
-            }
-          } else {
-            igChannel = await channelRepository.create({
+
+          if (!processedIgIds.has(igId)) {
+            processedIgIds.add(igId);
+
+            const igChannel = await channelRepository.upsert({
               platform: 'instagram',
               name: `Instagram @${igUsername}`,
               channelIdentifier: igId,
               accessToken: p.accessToken,
               appId: finalAppId,
               appSecret: finalAppSecret,
-              colorTag: '#E1306C'
+              colorTag: '#E1306C',
+              status: 'active'
             });
+            connectedChannels.push(igChannel);
           }
-          connectedChannels.push(igChannel);
         }
       }
 
