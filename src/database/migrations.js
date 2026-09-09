@@ -23,6 +23,7 @@ export async function initDatabase() {
     const schemaSql = fs.readFileSync(schemaPath, 'utf8');
 
     await client.query(schemaSql);
+    await client.query('ALTER TABLE channels ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL');
     console.log('✅ [DATABASE] Esquema e índices de PostgreSQL 16 verificados.');
 
     // 2. Verificar y sembrar administrador inicial

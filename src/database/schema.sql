@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS channels (
     color_tag VARCHAR(20) DEFAULT '#25D366',          -- Color distintivo para badge
     status VARCHAR(20) DEFAULT 'active' CHECK(status IN ('active', 'error', 'paused')),
     error_message TEXT,
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );

@@ -45,10 +45,22 @@ export const settingsController = {
         return res.status(400).json({ error: 'El token de acceso de Meta Graph API es obligatorio' });
       }
 
-      // Verificar si el identificador ya existe
-      const existing = await channelRepository.findByIdentifier(channelIdentifier.trim());
-      if (existing) {
-        return res.status(409).json({ error: 'Ya existe un canal configurado con ese identificador' });
+      // Verificar si el identificador ya existe (activo o archivado)
+      const existingAny = await channelRepository.findAnyByIdentifier(channelIdentifier.trim());
+      if (existingAny) {
+        if (!existingAny.deleted_at) {
+          return res.status(409).json({ error: 'Ya existe un canal activo configurado con ese identificador. Usa el botón Editar para modificarlo.' });
+        }
+
+        // Si estaba archivado/eliminado previamente, restaurarlo y reconectar todo su historial intacto
+        const restored = await channelRepository.restoreAndReactivate(existingAny.id, {
+          name: name.trim(),
+          accessToken: accessToken.trim(),
+          appId: appId ? appId.trim() : null,
+          appSecret: appSecret ? appSecret.trim() : null,
+          colorTag: colorTag || '#D4AF37'
+        });
+        return res.status(200).json(restored);
       }
 
       const newChannel = await channelRepository.create({

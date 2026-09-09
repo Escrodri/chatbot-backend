@@ -54,6 +54,19 @@ export const channelRepository = {
    */
   async findByIdentifier(identifier) {
     const { rows } = await query(
+      `SELECT * FROM channels WHERE channel_identifier = $1 AND deleted_at IS NULL`,
+      [identifier.trim()]
+    );
+
+    if (rows.length === 0) return null;
+    return this._decryptChannelSecrets(rows[0]);
+  },
+
+  /**
+   * Busca un canal por su identificador único (incluso si fue archivado/soft-deleted).
+   */
+  async findAnyByIdentifier(identifier) {
+    const { rows } = await query(
       `SELECT * FROM channels WHERE channel_identifier = $1`,
       [identifier.trim()]
     );
@@ -79,7 +92,7 @@ export const channelRepository = {
   },
 
   /**
-   * Lista todos los canales activos para la interfaz.
+   * Lista todos los canales activos para la interfaz (excluyendo archivados).
    * OMITIR estrictamente tokens cifrados y tags de autenticación para evitar fugas.
    * 
    * @returns {Promise<Array>}
@@ -88,6 +101,7 @@ export const channelRepository = {
     const { rows } = await query(
       `SELECT id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at 
        FROM channels 
+       WHERE deleted_at IS NULL
        ORDER BY id ASC`
     );
     return rows;
@@ -173,12 +187,53 @@ export const channelRepository = {
   },
 
   /**
-   * Elimina un canal por su ID.
+   * Elimina un canal por su ID mediante Soft Delete.
+   * Preserva todas las conversaciones, mensajes y contactos asociados (evita ON DELETE CASCADE).
    * @param {number} id
    * @returns {Promise<void>}
    */
   async deleteById(id) {
-    await query('DELETE FROM channels WHERE id = $1', [id]);
+    await query(
+      `UPDATE channels 
+       SET deleted_at = CURRENT_TIMESTAMP, status = 'paused' 
+       WHERE id = $1`,
+      [id]
+    );
+  },
+
+  /**
+   * Restaura y reactiva un canal previamente archivado conservando su ID y todo su historial de chats.
+   */
+  async restoreAndReactivate(id, { name, accessToken, appId = null, appSecret = null, colorTag = '#25D366' }) {
+    const encryptedToken = encryptSecret(accessToken);
+    let encryptedSecretJson = null;
+    if (appSecret) {
+      const encryptedAppSecret = encryptSecret(appSecret);
+      encryptedSecretJson = JSON.stringify(encryptedAppSecret);
+    }
+
+    const { rows } = await query(
+      `UPDATE channels 
+       SET name = $1, access_token_encrypted = $2, token_iv = $3, token_tag = $4,
+           app_id = COALESCE($5, app_id),
+           app_secret_encrypted = COALESCE($6, app_secret_encrypted),
+           color_tag = COALESCE($7, color_tag),
+           status = 'active', error_message = NULL, deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $8
+       RETURNING id, platform, name, channel_identifier, app_id, color_tag, status, created_at, updated_at`,
+      [
+        name.trim(),
+        encryptedToken.cipherText,
+        encryptedToken.iv,
+        encryptedToken.tag,
+        appId ? appId.trim() : null,
+        encryptedSecretJson,
+        colorTag,
+        id
+      ]
+    );
+
+    return rows[0] || null;
   },
 
   /**
