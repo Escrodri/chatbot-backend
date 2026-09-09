@@ -122,6 +122,10 @@ export const graphApiService = {
           }
         }
 
+        // Una nota de voz de verdad es un Ogg Opus. Cualquier otro audio
+        // (un mp3 que el operador adjunta, por ejemplo) se manda como archivo.
+        const esNotaDeVoz = type === 'audio' && String(mimeType || '').startsWith('audio/ogg');
+
         // Para el audio no sirve mandar un enlace: el almacenamiento externo
         // sirve los audios como si fueran video, y Meta rechaza el envío con
         // "Unsupported Audio mime type video/mp4". Si la subida directa falló,
@@ -143,6 +147,11 @@ export const graphApiService = {
           [type]: {
             ...(mediaId ? { id: mediaId } : { link: fullMediaUrl }),
             ...(type === 'document' && fileName ? { filename: fileName } : {}),
+            // Sin esto WhatsApp muestra un reproductor común, como el de un
+            // archivo adjunto, en vez de la burbuja de nota de voz con la onda
+            // y el avatar. Solo vale para Ogg con códec Opus en mono, que es
+            // justamente a lo que convertimos las grabaciones.
+            ...(esNotaDeVoz ? { voice: true } : {}),
             ...(type !== 'audio' && text ? { caption: text } : {})
           }
         };
