@@ -109,6 +109,10 @@ export const channelRepository = {
       fields.push(`name = $${idx++}`);
       values.push(name.trim());
     }
+    if (channelIdentifier !== undefined && channelIdentifier.trim()) {
+      fields.push(`channel_identifier = $${idx++}`);
+      values.push(channelIdentifier.trim());
+    }
     if (colorTag !== undefined) {
       fields.push(`color_tag = $${idx++}`);
       values.push(colorTag.trim());
@@ -117,14 +121,15 @@ export const channelRepository = {
       fields.push(`status = $${idx++}`);
       values.push(status);
     }
-    if (accessToken) {
-      const encryptedToken = encryptSecret(accessToken);
+    if (accessToken && accessToken.trim()) {
+      const encryptedToken = encryptSecret(accessToken.trim());
       fields.push(`access_token_encrypted = $${idx++}`);
       values.push(encryptedToken.cipherText);
       fields.push(`token_iv = $${idx++}`);
       values.push(encryptedToken.iv);
       fields.push(`token_tag = $${idx++}`);
       values.push(encryptedToken.tag);
+      fields.push(`error_message = NULL`);
     }
 
     if (fields.length === 0) {
