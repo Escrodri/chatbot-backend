@@ -185,6 +185,7 @@ export const conversationController = {
         mediaMime: savedMedia ? (savedMedia.mimeType || (contentType === 'image' ? 'image/jpeg' : null)) : null,
         status: 'pending'
       });
+      inserted.sender_user_name = req.user.name || 'Operador';
 
       // 2. Protocolo Handover: Pausar el bot para este chat
       await conversationRepository.updateBotStatus(conv.id, 'handed_over', req.user.id);
