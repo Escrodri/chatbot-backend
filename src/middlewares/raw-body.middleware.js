@@ -10,7 +10,7 @@ export const rawBodyJsonParser = express.json({
       req.rawBody = buf;
     }
   },
-  limit: '15mb' // Soporte para recepción de metadatos o medios en base64 si aplica
+  limit: '50mb' // Soporte para recepción de PDFs y medios de hasta 25MB en base64
 });
 
 export default rawBodyJsonParser;

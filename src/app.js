@@ -79,7 +79,7 @@ export function createApp() {
 
   // 4. Parsers con captura de rawBody para verificar la firma de Meta
   app.use(rawBodyJsonParser);
-  app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   // 5. Health check
   app.get('/health', (req, res) => {
