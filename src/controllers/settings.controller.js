@@ -250,9 +250,9 @@ export const settingsController = {
    */
   async getMetaAppInfo(req, res) {
     return res.json({
-      appId: envConfig.meta.appId || '',
-      // ID de la configuración de "Inicio de sesión con Facebook para empresas".
-      // Sin esto el botón de conectar no sabe qué permisos pedir.
+      appId: envConfig.meta.facebookAppId || envConfig.meta.appId || '',
+      facebookAppId: envConfig.meta.facebookAppId || '',
+      hasFacebookAppSecret: Boolean(envConfig.meta.facebookAppSecret),
       loginConfigId: envConfig.meta.loginConfigId || '',
       apiVersion: envConfig.meta.apiVersion || 'v26.0'
     });
@@ -265,22 +265,22 @@ export const settingsController = {
    * El canje se hace en el servidor porque necesita el App Secret, que nunca
    * debe viajar al navegador.
    *
-   * POST /api/settings/channels/facebook-exchange-code   body: { code }
+   * POST /api/settings/channels/facebook-exchange-code   body: { code, appId, appSecret }
    */
   async exchangeFacebookCode(req, res) {
     try {
-      const { code } = req.body;
+      const { code, appId = null, appSecret = null } = req.body;
 
       if (!code || typeof code !== 'string') {
         return res.status(400).json({ error: 'Falta el código de autorización devuelto por Meta.' });
       }
 
-      const fbAppId = envConfig.meta.facebookAppId || envConfig.meta.appId;
-      const fbAppSecret = envConfig.meta.facebookAppSecret || envConfig.meta.appSecret;
+      const fbAppId = appId ? String(appId).trim() : (envConfig.meta.facebookAppId || envConfig.meta.appId);
+      const fbAppSecret = appSecret ? String(appSecret).trim() : (envConfig.meta.facebookAppSecret || envConfig.meta.appSecret);
 
       if (!fbAppId || !fbAppSecret) {
-        return res.status(500).json({
-          error: 'El servidor no tiene configurados META_APP_ID / META_FACEBOOK_APP_ID y sus claves secretas.'
+        return res.status(400).json({
+          error: 'Debes ingresar el App ID y la Clave Secreta (App Secret) de tu aplicación de Facebook para canjear la autorización.'
         });
       }
 
@@ -309,7 +309,7 @@ export const settingsController = {
       }
 
       // Con el token en mano, el escaneo es exactamente el mismo de siempre.
-      const resultado = await settingsController._scanPagesConToken(tokenData.access_token, apiVersion);
+      const resultado = await settingsController._scanPagesConToken(tokenData.access_token, apiVersion, fbAppId, fbAppSecret);
 
       if (resultado.error) {
         return res.status(400).json(resultado);
@@ -327,7 +327,7 @@ export const settingsController = {
    */
   async scanFacebookPages(req, res) {
     try {
-      const { userToken } = req.body;
+      const { userToken, appId = null, appSecret = null } = req.body;
 
       if (!userToken || !userToken.trim()) {
         return res.status(400).json({
@@ -336,7 +336,7 @@ export const settingsController = {
       }
 
       const apiVersion = envConfig.meta.apiVersion || 'v26.0';
-      const resultado = await settingsController._scanPagesConToken(userToken.trim(), apiVersion);
+      const resultado = await settingsController._scanPagesConToken(userToken.trim(), apiVersion, appId, appSecret);
 
       if (resultado.error) {
         return res.status(400).json(resultado);
@@ -356,15 +356,17 @@ export const settingsController = {
    * @private
    * @param {string} token Token de acceso de usuario de Meta
    * @param {string} apiVersion
+   * @param {string|null} customAppId
+   * @param {string|null} customAppSecret
    * @returns {Promise<object>} { success, pages, permissions, missingRecommended, count } o { error }
    */
-  async _scanPagesConToken(token, apiVersion) {
+  async _scanPagesConToken(token, apiVersion, customAppId = null, customAppSecret = null) {
     let effectiveToken = token;
 
     // 1. Canjear por un token de larga duración si tenemos App ID y App Secret.
     //    Los tokens de página que salgan de este no expiran.
-    const fbAppId = envConfig.meta.facebookAppId || envConfig.meta.appId;
-    const fbAppSecret = envConfig.meta.facebookAppSecret || envConfig.meta.appSecret;
+    const fbAppId = customAppId ? String(customAppId).trim() : (envConfig.meta.facebookAppId || envConfig.meta.appId);
+    const fbAppSecret = customAppSecret ? String(customAppSecret).trim() : (envConfig.meta.facebookAppSecret || envConfig.meta.appSecret);
     if (fbAppId && fbAppSecret && !token.startsWith('EAAB_test')) {
       try {
         const exchangeUrl = `https://graph.facebook.com/${apiVersion}/oauth/access_token?grant_type=fb_exchange_token&client_id=${fbAppId}&client_secret=${fbAppSecret}&fb_exchange_token=${token}`;
@@ -468,8 +470,8 @@ export const settingsController = {
   async connectFacebookPages(req, res) {
     try {
       const { pages, appId = null, appSecret = null } = req.body;
-      const finalAppId = appId || envConfig.meta.facebookAppId || envConfig.meta.appId;
-      const finalAppSecret = appSecret || envConfig.meta.facebookAppSecret || envConfig.meta.appSecret;
+      const finalAppId = (appId && String(appId).trim()) ? String(appId).trim() : (envConfig.meta.facebookAppId || envConfig.meta.appId);
+      const finalAppSecret = (appSecret && String(appSecret).trim()) ? String(appSecret).trim() : (envConfig.meta.facebookAppSecret || envConfig.meta.appSecret);
 
       if (!Array.isArray(pages) || pages.length === 0) {
         return res.status(400).json({ error: 'Debes seleccionar al menos una página para conectar.' });
