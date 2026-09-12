@@ -275,9 +275,12 @@ export const settingsController = {
         return res.status(400).json({ error: 'Falta el código de autorización devuelto por Meta.' });
       }
 
-      if (!envConfig.meta.appId || !envConfig.meta.appSecret) {
+      const fbAppId = envConfig.meta.facebookAppId || envConfig.meta.appId;
+      const fbAppSecret = envConfig.meta.facebookAppSecret || envConfig.meta.appSecret;
+
+      if (!fbAppId || !fbAppSecret) {
         return res.status(500).json({
-          error: 'El servidor no tiene configurados META_APP_ID y META_APP_SECRET.'
+          error: 'El servidor no tiene configurados META_APP_ID / META_FACEBOOK_APP_ID y sus claves secretas.'
         });
       }
 
@@ -285,8 +288,8 @@ export const settingsController = {
 
       // En el flujo del SDK de JavaScript el redirect_uri va vacío.
       const params = new URLSearchParams({
-        client_id: envConfig.meta.appId,
-        client_secret: envConfig.meta.appSecret,
+        client_id: fbAppId,
+        client_secret: fbAppSecret,
         redirect_uri: '',
         code: code.trim()
       });
@@ -360,9 +363,11 @@ export const settingsController = {
 
     // 1. Canjear por un token de larga duración si tenemos App ID y App Secret.
     //    Los tokens de página que salgan de este no expiran.
-    if (envConfig.meta.appId && envConfig.meta.appSecret && !token.startsWith('EAAB_test')) {
+    const fbAppId = envConfig.meta.facebookAppId || envConfig.meta.appId;
+    const fbAppSecret = envConfig.meta.facebookAppSecret || envConfig.meta.appSecret;
+    if (fbAppId && fbAppSecret && !token.startsWith('EAAB_test')) {
       try {
-        const exchangeUrl = `https://graph.facebook.com/${apiVersion}/oauth/access_token?grant_type=fb_exchange_token&client_id=${envConfig.meta.appId}&client_secret=${envConfig.meta.appSecret}&fb_exchange_token=${token}`;
+        const exchangeUrl = `https://graph.facebook.com/${apiVersion}/oauth/access_token?grant_type=fb_exchange_token&client_id=${fbAppId}&client_secret=${fbAppSecret}&fb_exchange_token=${token}`;
         const exRes = await fetch(exchangeUrl);
         const exData = await exRes.json();
         if (exData.access_token) {
@@ -463,8 +468,8 @@ export const settingsController = {
   async connectFacebookPages(req, res) {
     try {
       const { pages, appId = null, appSecret = null } = req.body;
-      const finalAppId = appId || envConfig.meta.appId;
-      const finalAppSecret = appSecret || envConfig.meta.appSecret;
+      const finalAppId = appId || envConfig.meta.facebookAppId || envConfig.meta.appId;
+      const finalAppSecret = appSecret || envConfig.meta.facebookAppSecret || envConfig.meta.appSecret;
 
       if (!Array.isArray(pages) || pages.length === 0) {
         return res.status(400).json({ error: 'Debes seleccionar al menos una página para conectar.' });

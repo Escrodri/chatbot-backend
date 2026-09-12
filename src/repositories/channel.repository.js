@@ -63,16 +63,49 @@ export const channelRepository = {
   },
 
   /**
-   * Busca un canal por su identificador único (incluso si fue archivado/soft-deleted).
+   * Busca un canal por su identificador único (incluso si fue archivado/soft-deleted),
+   * admitiendo tanto channel_identifier (phone_number_id / page_id) como waba_id.
    */
   async findAnyByIdentifier(identifier) {
+    if (!identifier) return null;
+    const trimmed = String(identifier).trim();
     const { rows } = await query(
-      `SELECT * FROM channels WHERE channel_identifier = $1`,
-      [identifier.trim()]
+      `SELECT * FROM channels WHERE channel_identifier = $1 OR waba_id = $1`,
+      [trimmed]
     );
 
     if (rows.length === 0) return null;
     return this._decryptChannelSecrets(rows[0]);
+  },
+
+  /**
+   * Obtiene todos los App Secrets descifrados de los canales registrados en base de datos.
+   * Utilizado como fallback para validar firmas de webhooks en entornos multicanal/multiapp.
+   * 
+   * @returns {Promise<Array<string>>} Lista de secretos en texto plano
+   */
+  async getAllAppSecrets() {
+    try {
+      const { rows } = await query(
+        `SELECT app_secret_encrypted FROM channels WHERE app_secret_encrypted IS NOT NULL AND deleted_at IS NULL`
+      );
+      const secrets = [];
+      for (const row of rows) {
+        try {
+          if (!row.app_secret_encrypted) continue;
+          const secObj = JSON.parse(row.app_secret_encrypted);
+          const decrypted = decryptSecret(secObj.cipherText, secObj.iv, secObj.tag);
+          if (decrypted && typeof decrypted === 'string' && decrypted.trim()) {
+            secrets.push(decrypted.trim());
+          }
+        } catch {
+          // Omitir si falla el descifrado de algún registro
+        }
+      }
+      return secrets;
+    } catch {
+      return [];
+    }
   },
 
   /**
@@ -119,7 +152,9 @@ export const channelRepository = {
   async listAll() {
     const { rows } = await query(
       `SELECT id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at,
-              dataset_id, waba_id, (conversions_token_encrypted IS NOT NULL) AS tiene_token_conversiones 
+              dataset_id, waba_id, 
+              (app_secret_encrypted IS NOT NULL) AS tiene_app_secret,
+              (conversions_token_encrypted IS NOT NULL) AS tiene_token_conversiones 
        FROM channels 
        WHERE deleted_at IS NULL
        ORDER BY id ASC`

@@ -31,55 +31,117 @@ export async function verifyMetaSignature(req, res, next) {
     });
   }
 
-  const appSecret = config.meta.appSecret;
+  const objectType = req.body?.object;
+  const isWhatsApp = objectType === 'whatsapp_business_account';
+  const isFacebookOrInstagram = objectType === 'page' || objectType === 'instagram';
 
-  // 1. Intentar validar con META_APP_SECRET global del archivo .env
-  let isValid = false;
-  if (appSecret) {
-    isValid = verifyHmacSha256(req.rawBody, signatureHeader, appSecret);
+  // 1. Recolectar candidatos según plataforma y variables de entorno
+  const candidateSecrets = new Set();
+
+  if (isWhatsApp && config.meta.whatsappAppSecret) {
+    candidateSecrets.add(config.meta.whatsappAppSecret);
+  }
+  if (isFacebookOrInstagram && config.meta.facebookAppSecret) {
+    candidateSecrets.add(config.meta.facebookAppSecret);
   }
 
-  // 2. Si falló y el payload contiene un identificador de canal, intentar con el secreto del canal
+  // App Secret general (.env)
+  if (config.meta.appSecret) {
+    candidateSecrets.add(config.meta.appSecret);
+  }
+
+  // Secretos de la otra plataforma en .env si existen
+  if (config.meta.whatsappAppSecret) candidateSecrets.add(config.meta.whatsappAppSecret);
+  if (config.meta.facebookAppSecret) candidateSecrets.add(config.meta.facebookAppSecret);
+
+  // Lista de secretos en META_APP_SECRETS
+  if (Array.isArray(config.meta.appSecrets)) {
+    for (const sec of config.meta.appSecrets) {
+      if (sec) candidateSecrets.add(sec);
+    }
+  }
+
+  // Probar candidatos de variables de entorno
+  let isValid = false;
+  for (const secret of candidateSecrets) {
+    if (verifyHmacSha256(req.rawBody, signatureHeader, secret)) {
+      isValid = true;
+      break;
+    }
+  }
+
+  // 2. Si no validó con env, intentar con el secreto específico del canal en base de datos
   if (!isValid && req.body && typeof req.body === 'object') {
     try {
-      let identifier = null;
       const entry = req.body.entry?.[0];
+      const identifiers = [];
+
       if (entry?.changes?.[0]?.value?.metadata?.phone_number_id) {
-        identifier = String(entry.changes[0].value.metadata.phone_number_id).trim();
-      } else if (entry?.id) {
-        identifier = String(entry.id).trim();
+        identifiers.push(String(entry.changes[0].value.metadata.phone_number_id).trim());
+      }
+      if (entry?.id) {
+        identifiers.push(String(entry.id).trim());
+      }
+      if (entry?.messaging?.[0]?.recipient?.id) {
+        identifiers.push(String(entry.messaging[0].recipient.id).trim());
+      }
+      if (entry?.messaging?.[0]?.sender?.id) {
+        identifiers.push(String(entry.messaging[0].sender.id).trim());
       }
 
-      if (identifier) {
-        const channel = await channelRepository.findAnyByIdentifier(identifier);
+      for (const id of identifiers) {
+        const channel = await channelRepository.findAnyByIdentifier(id);
         if (channel?.app_secret) {
-          isValid = verifyHmacSha256(req.rawBody, signatureHeader, channel.app_secret);
-          if (isValid) {
-            console.log(`✅ [META SIGNATURE] Firma validada exitosamente con el App Secret del canal "${channel.name}" (${identifier}).`);
+          if (verifyHmacSha256(req.rawBody, signatureHeader, channel.app_secret)) {
+            isValid = true;
+            console.log(`✅ [META SIGNATURE] Firma validada exitosamente con el App Secret del canal "${channel.name}" (${id}).`);
+            break;
           }
         }
       }
     } catch {
-      // Ignorar errores de consulta a BD para que la verificación continúe normalmente
+      // Ignorar errores de BD para continuar al fallback general
     }
   }
 
-  // 3. Si ninguna firma coincide, rechazar con código 403
+  // 3. Fallback omnicanal: probar contra todos los App Secrets guardados en canales de la BD
   if (!isValid) {
-    const maskedSecret = appSecret
-      ? `${appSecret.slice(0, 4)}...${appSecret.slice(-4)}`
+    try {
+      const allDbSecrets = await channelRepository.getAllAppSecrets();
+      for (const dbSecret of allDbSecrets) {
+        if (dbSecret && verifyHmacSha256(req.rawBody, signatureHeader, dbSecret)) {
+          isValid = true;
+          console.log('✅ [META SIGNATURE] Firma validada exitosamente con el App Secret de un canal registrado en BD.');
+          break;
+        }
+      }
+    } catch {
+      // Ignorar
+    }
+  }
+
+  // 4. Si ninguna firma coincide, rechazar con código 403 y diagnóstico explicativo
+  if (!isValid) {
+    const maskedSecret = config.meta.appSecret
+      ? `${config.meta.appSecret.slice(0, 4)}...${config.meta.appSecret.slice(-4)}`
       : '(no configurado)';
 
-    console.warn('🚫 [SECURITY REJECTED] Webhook rechazado: La firma criptográfica HMAC-SHA256 no coincide con el App Secret.');
+    console.warn('🚫 [SECURITY REJECTED] Webhook rechazado: La firma criptográfica HMAC-SHA256 no coincide con ningún App Secret.');
     console.warn(`ℹ️ [DIAGNÓSTICO META WEBHOOK]:`);
-    console.warn(`   • App ID en backend: ${config.meta.appId || 'No definido'}`);
-    console.warn(`   • META_APP_SECRET actual en backend: ${maskedSecret}`);
-    console.warn(`   • ¿Qué verificar?:`);
-    console.warn(`     1. Ingresa a https://developers.facebook.com/apps/`);
-    console.warn(`     2. Selecciona la App que configuró este webhook.`);
-    console.warn(`     3. Ve a "Configuración de la app" > "Básica".`);
-    console.warn(`     4. Copia la "Clave secreta de la app" (App Secret) y pégala en META_APP_SECRET de tu archivo backend/.env.`);
-    console.warn(`     5. Reinicia el backend.`);
+    console.warn(`   • Plataforma en webhook: ${objectType || 'desconocida'}`);
+    console.warn(`   • App ID general en backend: ${config.meta.appId || 'No definido'}`);
+    console.warn(`   • META_APP_SECRET actual: ${maskedSecret}`);
+    console.warn(`   • META_WHATSAPP_APP_SECRET: ${config.meta.whatsappAppSecret ? 'Configurado' : 'No configurado'}`);
+    console.warn(`   • META_FACEBOOK_APP_SECRET: ${config.meta.facebookAppSecret ? 'Configurado' : 'No configurado'}`);
+    console.warn(`   • ¿Por qué se repite este mensaje en el servidor?`);
+    console.warn(`     Meta reintenta enviar el webhook automáticamente varias veces cuando el servidor responde con 403.`);
+    console.warn(`   • ¿Cómo solucionarlo si tienes dos aplicativos de Meta (WhatsApp y Facebook)?:`);
+    console.warn(`     1. Ingresa a tu panel de hosting (Render > Environment) o a tu archivo .env.`);
+    console.warn(`     2. Agrega los App Secrets individuales según corresponda:`);
+    console.warn(`        • META_WHATSAPP_APP_SECRET="tu_app_secret_de_whatsapp"`);
+    console.warn(`        • META_FACEBOOK_APP_SECRET="tu_app_secret_de_facebook"`);
+    console.warn(`        • o META_APP_SECRETS="secreto1,secreto2"`);
+    console.warn(`     3. Alternativamente, en Ajustes > Canales de tu panel web, edita el canal e ingresa su "Clave secreta de la app".`);
 
     return res.status(403).json({
       success: false,

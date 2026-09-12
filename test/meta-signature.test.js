@@ -71,3 +71,56 @@ test('T-08: verifyMetaSignature rechaza firmas alteradas con 403 Forbidden', asy
     server.close();
   }
 });
+
+test('T-08: verifyMetaSignature valida correctamente con secretos específicos por plataforma (Multi-App)', async () => {
+  const app = express();
+  app.use(rawBodyJsonParser);
+  app.post('/webhook', verifyMetaSignature, (req, res) => {
+    res.status(200).json({ status: 'MULTI_APP_SUCCESS' });
+  });
+
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, resolve));
+  const port = server.address().port;
+
+  const originalWaSecret = config.meta.whatsappAppSecret;
+  const originalFbSecret = config.meta.facebookAppSecret;
+  config.meta.whatsappAppSecret = 'wa_secret_test_12345';
+  config.meta.facebookAppSecret = 'fb_secret_test_67890';
+
+  try {
+    // 1. Probar evento de WhatsApp firmado con wa_secret
+    const waPayload = JSON.stringify({ object: 'whatsapp_business_account', entry: [] });
+    const waRaw = Buffer.from(waPayload);
+    const waSig = 'sha256=' + calculateHmacSha256(waRaw, config.meta.whatsappAppSecret);
+
+    const waRes = await fetch(`http://127.0.0.1:${port}/webhook`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Hub-Signature-256': waSig
+      },
+      body: waPayload
+    });
+    assert.equal(waRes.status, 200);
+
+    // 2. Probar evento de Facebook firmado con fb_secret
+    const fbPayload = JSON.stringify({ object: 'page', entry: [] });
+    const fbRaw = Buffer.from(fbPayload);
+    const fbSig = 'sha256=' + calculateHmacSha256(fbRaw, config.meta.facebookAppSecret);
+
+    const fbRes = await fetch(`http://127.0.0.1:${port}/webhook`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Hub-Signature-256': fbSig
+      },
+      body: fbPayload
+    });
+    assert.equal(fbRes.status, 200);
+  } finally {
+    config.meta.whatsappAppSecret = originalWaSecret;
+    config.meta.facebookAppSecret = originalFbSecret;
+    server.close();
+  }
+});

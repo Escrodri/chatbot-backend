@@ -101,6 +101,14 @@ export const envConfig = Object.freeze({
   meta: {
     appId: (process.env.META_APP_ID || '2381150255623992').trim(),
     appSecret: (process.env.META_APP_SECRET || '').trim(),
+    whatsappAppId: (process.env.META_WHATSAPP_APP_ID || '').trim(),
+    whatsappAppSecret: (process.env.META_WHATSAPP_APP_SECRET || '').trim(),
+    facebookAppId: (process.env.META_FACEBOOK_APP_ID || '').trim(),
+    facebookAppSecret: (process.env.META_FACEBOOK_APP_SECRET || '').trim(),
+    appSecrets: (process.env.META_APP_SECRETS || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean),
     verifyToken: (process.env.META_VERIFY_TOKEN || '').trim(),
     loginConfigId: (process.env.META_LOGIN_CONFIG_ID || '').trim(),
     apiVersion: (process.env.META_API_VERSION || 'v26.0').trim(),
