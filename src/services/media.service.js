@@ -75,6 +75,52 @@ export const mediaService = {
   },
 
   /**
+   * ¿Este archivo es una imagen que hay que reconvertir antes de mandarlo a Meta?
+   *
+   * Meta (WhatsApp Cloud API, Instagram Direct y Facebook Messenger) solo acepta
+   * de forma garantizada image/jpeg e image/png para imágenes.
+   * Formatos como WebP, JFIF, BMP, TIFF, SVG, etc. son rechazados por Meta con:
+   * "Param messages[0][image][link] has unexpected mime type: image/webp".
+   * Por eso se convierten automáticamente a JPEG de alta calidad usando FFmpeg.
+   *
+   * @param {string} ext Extensión con punto, en minúsculas
+   * @param {string} mime Tipo MIME sin parámetros, en minúsculas
+   * @returns {boolean}
+   */
+  necesitaConversionDeImagen(ext = '', mime = '') {
+    const YA_SIRVEN = ['.jpg', '.jpeg', '.png'];
+    const EXTENSIONES_IMAGEN = ['.webp', '.jfif', '.bmp', '.tiff', '.tif', '.svg', '.gif', '.heic', '.heif', '.avif', '.jpg', '.jpeg', '.png'];
+
+    const cleanMime = String(mime).toLowerCase();
+    const cleanExt = String(ext).toLowerCase();
+    const esImagen = cleanMime.startsWith('image/') || EXTENSIONES_IMAGEN.includes(cleanExt);
+    return esImagen && !YA_SIRVEN.includes(cleanExt) && cleanMime !== 'image/png' && cleanMime !== 'image/jpeg';
+  },
+
+  /**
+   * Convierte cualquier imagen (WebP, BMP, TIFF, JFIF, etc.) a JPEG de alta calidad con FFmpeg.
+   */
+  async convertirImagenAJpeg(inputPath, outputPath) {
+    return new Promise((resolve, reject) => {
+      try {
+        if (process.platform !== 'win32' && ffmpeg.path && fs.existsSync(ffmpeg.path)) {
+          fs.chmodSync(ffmpeg.path, 0o755);
+        }
+      } catch {}
+
+      // ffmpeg -i input.webp -q:v 2 -y output.jpg
+      const args = ['-i', inputPath, '-q:v', '2', '-y', outputPath];
+      execFile(ffmpeg.path, args, (err, stdout, stderr) => {
+        if (err) {
+          console.error('❌ [FFMPEG IMAGE TRANSCODE ERROR]:', stderr || err.message);
+          return reject(err);
+        }
+        resolve(outputPath);
+      });
+    });
+  },
+
+  /**
    * Convierte cualquier audio a OGG con códec Opus mono usando FFmpeg.
    *
    * Meta acepta muy pocos formatos para notas de voz y, sobre todo, verifica el
@@ -171,6 +217,32 @@ export const mediaService = {
         console.error(
           `❌ [AUDIO] No se pudo convertir la nota de voz a Ogg Opus: ${convErr.message}. ` +
           'Meta va a rechazar el envío.'
+        );
+      }
+    }
+
+    // Meta (WhatsApp Cloud API, Instagram, Messenger) solo acepta de forma garantizada image/jpeg e image/png.
+    // Formatos como WebP, JFIF, BMP, TIFF, SVG, etc., son rechazados por Meta con error #100.
+    // Los convertimos automáticamente a JPEG de alta calidad con FFmpeg.
+    if (this.necesitaConversionDeImagen(ext, cleanMime)) {
+      try {
+        const convertedFileName = `${Date.now()}_${fileHash}.jpg`;
+        const convertedFilePath = path.join(UPLOADS_DIR, convertedFileName);
+        await this.convertirImagenAJpeg(filePath, convertedFilePath);
+
+        try { fs.unlinkSync(filePath); } catch {}
+
+        console.log(`🖼️ [IMAGEN] Imagen convertida de ${ext || cleanMime} a JPEG de alta calidad.`);
+
+        finalFileName = convertedFileName;
+        filePath = convertedFilePath;
+        ext = '.jpg';
+        cleanMime = 'image/jpeg';
+        fileName = (fileName || 'imagen').replace(/\.[a-z0-9]+$/i, '') + '.jpg';
+      } catch (convErr) {
+        console.error(
+          `❌ [IMAGEN] No se pudo convertir la imagen a JPEG: ${convErr.message}. ` +
+          'Se intentará enviar el archivo original.'
         );
       }
     }

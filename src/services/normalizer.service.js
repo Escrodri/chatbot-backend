@@ -91,6 +91,8 @@ export const normalizerService = {
               // no se guarda ahora, la venta no se puede atribuir al anuncio nunca más.
               const ref = msg.referral || null;
 
+              const isViewOnce = Boolean(msg.image?.view_once || msg.video?.view_once);
+
               events.push({
                 platform: 'whatsapp',
                 channelIdentifier: phoneId,
@@ -117,7 +119,8 @@ export const normalizerService = {
                   text: textContent,
                   mediaId,
                   mimeType,
-                  mediaDirectUrl
+                  mediaDirectUrl,
+                  isViewOnce
                 }
               });
             }

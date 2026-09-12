@@ -38,7 +38,8 @@ export const messageRepository = {
     mediaMime = null,
     status = 'sent',
     errorDetails = null,
-    timestamp = null
+    timestamp = null,
+    isViewOnce = false
   }) {
     const errorDetailsJson = errorDetails ? JSON.stringify(errorDetails) : null;
 
@@ -46,11 +47,11 @@ export const messageRepository = {
       `INSERT INTO messages (
          conversation_id, channel_id, meta_message_id, direction,
          sender_type, sender_user_id, content_type, text, media_url,
-         meta_media_id, media_mime, status, error_details, timestamp
+         meta_media_id, media_mime, status, error_details, timestamp, is_view_once
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, CURRENT_TIMESTAMP))
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, CURRENT_TIMESTAMP), $15)
        ON CONFLICT (meta_message_id) DO NOTHING
-       RETURNING id, conversation_id, channel_id, meta_message_id, direction, sender_type, sender_user_id, content_type, text, media_url, meta_media_id, media_mime, status, error_details, timestamp`,
+       RETURNING id, conversation_id, channel_id, meta_message_id, direction, sender_type, sender_user_id, content_type, text, media_url, meta_media_id, media_mime, status, error_details, timestamp, is_view_once, viewed_at`,
       [
         conversationId,
         channelId,
@@ -65,7 +66,8 @@ export const messageRepository = {
         mediaMime,
         status,
         errorDetailsJson,
-        timestamp
+        timestamp,
+        Boolean(isViewOnce)
       ]
     );
 
@@ -100,6 +102,7 @@ export const messageRepository = {
         m.sender_type, m.sender_user_id, m.content_type, m.text, m.media_url,
         m.meta_media_id, m.media_mime,
         m.status, m.error_details, m.timestamp,
+        m.is_view_once, m.viewed_at,
         u.name as sender_user_name
       FROM messages m
       LEFT JOIN users u ON m.sender_user_id = u.id
@@ -123,10 +126,28 @@ export const messageRepository = {
   async findByIdWithChannel(id) {
     const { rows } = await query(
       `SELECT id, conversation_id, channel_id, content_type, media_url,
-              meta_media_id, media_mime, text, direction, status, sender_type
+              meta_media_id, media_mime, text, direction, status, sender_type,
+              is_view_once, viewed_at
        FROM messages
        WHERE id = $1`,
       [id]
+    );
+    return rows[0] || null;
+  },
+
+  /**
+   * Marca un mensaje de una sola vista como visualizado / abierto.
+   * 
+   * @param {number} messageId
+   * @returns {Promise<object|null>}
+   */
+  async markMessageAsViewed(messageId) {
+    const { rows } = await query(
+      `UPDATE messages
+       SET viewed_at = COALESCE(viewed_at, CURRENT_TIMESTAMP)
+       WHERE id = $1
+       RETURNING id, conversation_id, channel_id, is_view_once, viewed_at`,
+      [messageId]
     );
     return rows[0] || null;
   },

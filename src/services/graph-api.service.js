@@ -54,7 +54,8 @@ export const graphApiService = {
     contentType = 'text',
     fileName = null,
     localFilePath = null,
-    mimeType = null
+    mimeType = null,
+    isViewOnce = false
   }) {
     const apiVersion = config.meta.apiVersion || 'v26.0';
     const accessToken = channel.accessToken;
@@ -91,23 +92,55 @@ export const graphApiService = {
       return `${baseUrl}${mediaUrl.startsWith('/') ? mediaUrl : `/${mediaUrl}`}`;
     }
 
+    // Garantizar que las imágenes cumplan los estrictos requisitos de Meta (JPEG o PNG):
+    // Si la imagen está en un formato no compatible (como WebP, BMP, TIFF, JFIF), la convertimos al vuelo a JPEG.
+    let finalFilePath = localFilePath || mediaService.resolveLocalPath(mediaUrl);
+    let finalMimeType = mimeType;
+    let finalMediaUrl = mediaUrl;
+
+    if (contentType === 'image') {
+      const ext = finalFilePath ? path.extname(finalFilePath).toLowerCase() : (mediaUrl ? path.extname(mediaUrl.split('?')[0]).toLowerCase() : '');
+      if (mediaService.necesitaConversionDeImagen(ext, finalMimeType || '')) {
+        if (finalFilePath && fs.existsSync(finalFilePath)) {
+          try {
+            const convertedJpgPath = finalFilePath.replace(/\.[a-z0-9]+$/i, '') + '.jpg';
+            await mediaService.convertirImagenAJpeg(finalFilePath, convertedJpgPath);
+            finalFilePath = convertedJpgPath;
+            finalMimeType = 'image/jpeg';
+            if (finalMediaUrl) {
+              finalMediaUrl = finalMediaUrl.replace(/\.[a-z0-9]+$/i, '') + '.jpg';
+            }
+            console.log(`🖼️ [GRAPH-API] Transcodificada imagen a JPEG para entrega exitosa a Meta.`);
+          } catch (transcodeErr) {
+            console.warn('⚠️ [GRAPH-API] Advertencia en transcodificación de imagen:', transcodeErr.message);
+          }
+        } else if (finalMimeType !== 'image/png') {
+          finalMimeType = 'image/jpeg';
+        }
+      }
+    }
+
+    const effectiveText = isViewOnce
+      ? (text ? `① [1 sola vista] ${text}` : '① Foto (Ver una sola vez)')
+      : text;
+
     // 1. WHATSAPP CLOUD API
     if (channel.platform === 'whatsapp') {
       const url = `${META_API_BASE}/${apiVersion}/${channel.channel_identifier}/messages`;
       let payload;
 
-      if (mediaUrl) {
-        const fullMediaUrl = resolveFullMediaUrl(mediaUrl);
+      if (finalMediaUrl) {
+        const fullMediaUrl = resolveFullMediaUrl(finalMediaUrl);
         const type = ['image', 'audio', 'video', 'document'].includes(contentType) ? contentType : 'document';
         
         // Intentar subida directa del binario local hacia Meta WhatsApp Media API
         // Esto evita depender de enlaces externos o fallar en localhost
         let mediaId = null;
-        const resolvedPath = localFilePath || mediaService.resolveLocalPath(mediaUrl);
+        const resolvedPath = finalFilePath;
         if (resolvedPath && fs.existsSync(resolvedPath)) {
           try {
-            // Meta exige el códec explícito para las notas de voz.
-            let uploadMime = mimeType || (type === 'audio' ? 'audio/ogg' : 'application/octet-stream');
+            // Meta exige el códec explícito para las notas de voz o tipo image/jpeg para fotos
+            let uploadMime = finalMimeType || (type === 'audio' ? 'audio/ogg' : (type === 'image' ? 'image/jpeg' : 'application/octet-stream'));
             if (type === 'audio' && uploadMime.startsWith('audio/ogg')) {
               uploadMime = 'audio/ogg; codecs=opus';
             }
@@ -124,7 +157,7 @@ export const graphApiService = {
 
         // Una nota de voz de verdad es un Ogg Opus. Cualquier otro audio
         // (un mp3 que el operador adjunta, por ejemplo) se manda como archivo.
-        const esNotaDeVoz = type === 'audio' && String(mimeType || '').startsWith('audio/ogg');
+        const esNotaDeVoz = type === 'audio' && String(finalMimeType || '').startsWith('audio/ogg');
 
         // Para el audio no sirve mandar un enlace: el almacenamiento externo
         // sirve los audios como si fueran video, y Meta rechaza el envío con
@@ -152,7 +185,7 @@ export const graphApiService = {
             // y el avatar. Solo vale para Ogg con códec Opus en mono, que es
             // justamente a lo que convertimos las grabaciones.
             ...(esNotaDeVoz ? { voice: true } : {}),
-            ...(type !== 'audio' && text ? { caption: text } : {})
+            ...(type !== 'audio' && effectiveText ? { caption: effectiveText } : {})
           }
         };
       } else {
@@ -161,7 +194,7 @@ export const graphApiService = {
           recipient_type: 'individual',
           to: recipientId,
           type: 'text',
-          text: { preview_url: false, body: text }
+          text: { preview_url: false, body: effectiveText }
         };
       }
 
@@ -173,13 +206,13 @@ export const graphApiService = {
       const url = `${META_API_BASE}/${apiVersion}/me/messages`;
       let messagePayload;
 
-      if (mediaUrl) {
-        const fullMediaUrl = resolveFullMediaUrl(mediaUrl);
+      if (finalMediaUrl) {
+        const fullMediaUrl = resolveFullMediaUrl(finalMediaUrl);
         const attachmentType = contentType === 'document' ? 'file' : (['image', 'audio', 'video'].includes(contentType) ? contentType : 'file');
         
         // Intentar subida directa a Messenger Attachment API
         let attachmentId = null;
-        const resolvedPath = localFilePath || mediaService.resolveLocalPath(mediaUrl);
+        const resolvedPath = finalFilePath;
         if (resolvedPath && fs.existsSync(resolvedPath)) {
           try {
             attachmentId = await this.uploadAttachmentToMessenger({
@@ -203,7 +236,7 @@ export const graphApiService = {
           }
         };
       } else {
-        messagePayload = { text };
+        messagePayload = { text: effectiveText };
       }
 
       const payload = {
@@ -226,8 +259,8 @@ export const graphApiService = {
       const url = `${META_API_BASE}/${apiVersion}/me/messages`;
       let messagePayload;
 
-      if (mediaUrl) {
-        const fullMediaUrl = resolveFullMediaUrl(mediaUrl);
+      if (finalMediaUrl) {
+        const fullMediaUrl = resolveFullMediaUrl(finalMediaUrl);
         const igAttachmentType = ['image', 'audio', 'video'].includes(contentType) ? contentType : 'image';
         messagePayload = {
           attachment: {
@@ -238,7 +271,7 @@ export const graphApiService = {
           }
         };
       } else {
-        messagePayload = { text };
+        messagePayload = { text: effectiveText };
       }
 
       const payload = {

@@ -238,7 +238,8 @@ export const webhookService = {
         metaMediaId: event.message.mediaId || null,
         mediaMime: event.message.mimeType || null,
         status: 'delivered',
-        timestamp: event.message.timestamp
+        timestamp: event.message.timestamp,
+        isViewOnce: Boolean(event.message.isViewOnce)
       });
 
       // Si es un duplicado, se descarta silenciosamente

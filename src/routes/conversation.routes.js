@@ -22,6 +22,9 @@ conversationRouter.post('/:id/messages', conversationController.sendMessage);
 // Reintentar el envío de un mensaje que Meta rechazó (conserva el adjunto)
 conversationRouter.post('/:id/messages/:messageId/retry', conversationController.retryMessage);
 
+// Marcar imagen de una sola vista como visualizada / abierta
+conversationRouter.post('/:id/messages/:messageId/view', conversationController.markMessageViewed);
+
 // Marcar que la conversación terminó en venta e informárselo a Meta
 conversationRouter.post('/:id/sale', conversationController.registerSale);
 

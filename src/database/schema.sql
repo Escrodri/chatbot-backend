@@ -121,6 +121,8 @@ CREATE INDEX IF NOT EXISTS idx_webhook_logs_payload_gin ON webhook_logs USING gi
 -- ==============================================================================
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS meta_media_id VARCHAR(255);
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_mime VARCHAR(100);
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_view_once BOOLEAN DEFAULT FALSE;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS viewed_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_messages_media ON messages(meta_media_id) WHERE meta_media_id IS NOT NULL;
 

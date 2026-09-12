@@ -214,6 +214,17 @@ class SocketManager {
   }
 
   /**
+   * Emite que una imagen de una sola vista fue abierta/visualizada.
+   * @param {number} channelId
+   * @param {{ conversationId: number, messageId: number, viewed_at: Date|string }} data
+   */
+  emitMessageViewed(channelId, data) {
+    const audience = this._audience(channelId);
+    if (!audience) return;
+    audience.emit('message_viewed', data);
+  }
+
+  /**
    * Emite la actualización de la cabecera de una conversación.
    * @param {number} channelId
    * @param {object} conversationData

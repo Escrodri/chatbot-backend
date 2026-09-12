@@ -196,7 +196,7 @@ export const conversationController = {
   async sendMessage(req, res) {
     try {
       const id = parseInt(req.params.id, 10);
-      const { text, fileBase64, fileName, mimeType } = req.body;
+      const { text, fileBase64, fileName, mimeType, isViewOnce } = req.body;
 
       if (isNaN(id)) {
         return res.status(400).json({ error: 'ID de conversación inválido' });
@@ -238,7 +238,12 @@ export const conversationController = {
 
       const contentType = savedMedia ? savedMedia.contentType : 'text';
       const mediaUrl = savedMedia ? savedMedia.localUrl : null;
-      const defaultMediaText = savedMedia ? (savedMedia.contentType === 'audio' ? '🎵 [Nota de voz / Audio]' : `[Archivo: ${savedMedia.fileName}]`) : '';
+      let defaultMediaText = '';
+      if (isViewOnce) {
+        defaultMediaText = '① Foto';
+      } else if (savedMedia) {
+        defaultMediaText = savedMedia.contentType === 'audio' ? '🎵 [Nota de voz / Audio]' : `[Archivo: ${savedMedia.fileName}]`;
+      }
       const messageText = (text || defaultMediaText).trim();
 
       // 1. Persistir mensaje en base de datos
@@ -252,7 +257,8 @@ export const conversationController = {
         text: messageText,
         mediaUrl,
         mediaMime: savedMedia ? (savedMedia.mimeType || (contentType === 'image' ? 'image/jpeg' : null)) : null,
-        status: 'pending'
+        status: 'pending',
+        isViewOnce: Boolean(isViewOnce)
       });
       inserted.sender_user_name = req.user.name || 'Operador';
 
@@ -287,7 +293,8 @@ export const conversationController = {
             fileName: savedMedia?.fileName,
             localFilePath: savedMedia?.filePath,
             mimeType: savedMedia?.mimeType,
-            lastCustomerInteraction: conv.last_customer_interaction
+            lastCustomerInteraction: conv.last_customer_interaction,
+            isViewOnce: Boolean(isViewOnce)
           });
           metaMessageId = sendResult?.metaMessageId || null;
 
@@ -405,7 +412,9 @@ export const conversationController = {
           mediaUrl: mensaje.media_url || null,
           contentType: mensaje.content_type || 'text',
           fileName: nombreArchivo,
-          lastCustomerInteraction: conv.last_customer_interaction
+          mimeType: mensaje.media_mime || null,
+          lastCustomerInteraction: conv.last_customer_interaction,
+          isViewOnce: Boolean(mensaje.is_view_once)
         });
         metaMessageId = sendResult?.metaMessageId || null;
 
@@ -438,6 +447,54 @@ export const conversationController = {
       });
     } catch (error) {
       return res.status(500).json({ error: 'Error al reintentar el envío: ' + error.message });
+    }
+  },
+
+  /**
+   * Marca una imagen de una sola vista como visualizada / abierta.
+   * POST /api/conversations/:id/messages/:messageId/view
+   */
+  async markMessageViewed(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const messageId = parseInt(req.params.messageId, 10);
+
+      if (isNaN(id) || isNaN(messageId)) {
+        return res.status(400).json({ error: 'Identificadores inválidos' });
+      }
+
+      const conv = await conversationRepository.findById(id);
+      if (!conv) {
+        return res.status(404).json({ error: 'Conversación no encontrada' });
+      }
+
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
+      }
+
+      const msg = await messageRepository.findByIdWithChannel(messageId);
+      if (!msg || msg.conversation_id !== conv.id) {
+        return res.status(404).json({ error: 'Mensaje no encontrado en esta conversación' });
+      }
+
+      const updated = await messageRepository.markMessageAsViewed(messageId);
+
+      // Notificar a todos los operadores en la sala del canal
+      socketManager.emitMessageViewed(conv.channel_id, {
+        conversationId: conv.id,
+        messageId,
+        viewed_at: updated?.viewed_at || new Date()
+      });
+
+      return res.json({
+        success: true,
+        message: updated
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al marcar imagen como vista: ' + error.message });
     }
   },
 
