@@ -14,14 +14,14 @@ CREATE TABLE IF NOT EXISTS teams (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- 1. Operadores del Sistema (Roles: admin, agent)
+-- 1. Operadores del Sistema (Roles: superadmin, admin, agent)
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     name VARCHAR(255) NOT NULL,
-    role VARCHAR(20) DEFAULT 'agent' CHECK(role IN ('admin', 'agent')),
+    role VARCHAR(20) DEFAULT 'agent' CHECK(role IN ('superadmin', 'admin', 'agent')),
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );

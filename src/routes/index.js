@@ -4,6 +4,7 @@ import { testRouter } from './test.routes.js';
 import { dataDeletionRouter } from './data-deletion.routes.js';
 import { authRouter } from './auth.routes.js';
 import { settingsRouter } from './settings.routes.js';
+import { teamsRouter } from './teams.routes.js';
 import { conversationRouter } from './conversation.routes.js';
 import { mediaRouter } from './media.routes.js';
 import { config } from '../config/index.js';
@@ -15,6 +16,9 @@ apiRouter.use('/auth', authRouter);
 
 // Montar endpoints de administración y configuración
 apiRouter.use('/settings', settingsRouter);
+
+// Montar endpoints de gestión global de equipos (Superadmin)
+apiRouter.use('/teams', teamsRouter);
 
 // Montar endpoints de mensajería omnicanal
 apiRouter.use('/conversations', conversationRouter);

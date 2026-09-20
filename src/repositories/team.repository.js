@@ -73,6 +73,55 @@ export const teamRepository = {
   },
 
   /**
+   * Lista todos los equipos registrados con métricas de usuarios y canales (para el Superadmin).
+   */
+  async listAllWithMetrics() {
+    const { rows } = await query(
+      `SELECT
+         t.id, t.name, t.meta_app_id, t.created_at,
+         (t.meta_app_secret_encrypted IS NOT NULL) AS has_meta_secret,
+         COUNT(DISTINCT u.id)::int AS total_users,
+         COUNT(DISTINCT c.id) FILTER (WHERE c.deleted_at IS NULL)::int AS total_channels
+       FROM teams t
+       LEFT JOIN users u ON u.team_id = t.id
+       LEFT JOIN channels c ON c.team_id = t.id
+       GROUP BY t.id
+       ORDER BY t.id ASC`
+    );
+    return rows;
+  },
+
+  /**
+   * Crea un nuevo equipo / empresa en la base de datos.
+   * @param {{ name: string, metaAppId?: string, metaAppSecret?: string }} data
+   */
+  async createTeam({ name, metaAppId = null, metaAppSecret = null }) {
+    const cleanName = String(name || '').trim();
+    const cleanAppId = (metaAppId && String(metaAppId).trim()) ? String(metaAppId).trim() : null;
+    const cleanAppSecret = (metaAppSecret && String(metaAppSecret).trim()) ? String(metaAppSecret).trim() : null;
+
+    let cipherText = null;
+    let iv = null;
+    let tag = null;
+
+    if (cleanAppSecret) {
+      const encrypted = encryptSecret(cleanAppSecret);
+      cipherText = encrypted.cipherText;
+      iv = encrypted.iv;
+      tag = encrypted.tag;
+    }
+
+    const { rows } = await query(
+      `INSERT INTO teams (name, meta_app_id, meta_app_secret_encrypted, token_iv, token_tag)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, meta_app_id, created_at`,
+      [cleanName, cleanAppId, cipherText, iv, tag]
+    );
+
+    return rows[0];
+  },
+
+  /**
    * Elimina las credenciales de Meta de un equipo.
    * @param {number} teamId 
    */

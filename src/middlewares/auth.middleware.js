@@ -40,7 +40,7 @@ export function requireAuth(req, res, next) {
 }
 
 /**
- * Middleware para restringir acceso exclusivo a usuarios con rol 'admin'.
+ * Middleware para restringir acceso exclusivo a administradores (admin o superadmin).
  * Debe ejecutarse después de `requireAuth`.
  */
 export function requireAdmin(req, res, next) {
@@ -50,9 +50,29 @@ export function requireAdmin(req, res, next) {
     });
   }
 
-  if (req.user.role !== 'admin') {
+  if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
     return res.status(403).json({
       error: 'Acceso restringido a administradores'
+    });
+  }
+
+  next();
+}
+
+/**
+ * Middleware para restringir acceso exclusivo al Superadministrador de la plataforma.
+ * Debe ejecutarse después de `requireAuth`.
+ */
+export function requireSuperAdmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({
+      error: 'No autorizado: sesión requerida'
+    });
+  }
+
+  if (req.user.role !== 'superadmin') {
+    return res.status(403).json({
+      error: 'Acceso restringido al Superadministrador de la plataforma'
     });
   }
 
