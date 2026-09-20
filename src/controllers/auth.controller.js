@@ -98,15 +98,35 @@ export const authController = {
       });
     }
 
-    return res.status(200).json({
-      user: {
-        id: req.user.id,
-        team_id: req.user.team_id || 1,
-        email: req.user.email,
-        name: req.user.name,
-        role: req.user.role
+    try {
+      const user = await userRepository.findById(req.user.id);
+      if (!user || !user.is_active) {
+        return res.status(401).json({
+          error: 'Usuario inactivo o no encontrado'
+        });
       }
-    });
+
+      return res.status(200).json({
+        user: {
+          id: user.id,
+          team_id: user.team_id || 1,
+          email: user.email,
+          name: user.name,
+          role: user.role
+        }
+      });
+    } catch (err) {
+      // Fallback a la sesión JWT si la BD no responde
+      return res.status(200).json({
+        user: {
+          id: req.user.id,
+          team_id: req.user.team_id || 1,
+          email: req.user.email,
+          name: req.user.name,
+          role: req.user.role
+        }
+      });
+    }
   }
 };
 

@@ -26,11 +26,28 @@ export async function initDatabase() {
     await client.query('ALTER TABLE channels ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL');
     await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE');
     await client.query('ALTER TABLE channels ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE');
+    // Actualizar restricción de roles dinámicamente para soportar 'superadmin'
     try {
-      await client.query('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
+      await client.query(`
+        DO $$
+        DECLARE
+            con_record RECORD;
+        BEGIN
+            FOR con_record IN (
+                SELECT c.conname
+                FROM pg_constraint c
+                JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                WHERE c.conrelid = 'users'::regclass
+                  AND c.contype = 'c'
+                  AND a.attname = 'role'
+            ) LOOP
+                EXECUTE 'ALTER TABLE users DROP CONSTRAINT IF EXISTS ' || quote_ident(con_record.conname);
+            END LOOP;
+        END $$;
+      `);
       await client.query("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK(role IN ('superadmin', 'admin', 'agent'))");
     } catch (cErr) {
-      // Ignorar si la BD no permite drop de constraint
+      console.warn('⚠️ [DATABASE] Nota sobre constraint de roles:', cErr.message);
     }
 
     // 2. Sembrar equipo principal por defecto si no existe ninguno
@@ -49,9 +66,14 @@ export async function initDatabase() {
     await client.query('UPDATE users SET team_id = $1 WHERE team_id IS NULL', [defaultTeamId]);
     await client.query('UPDATE channels SET team_id = $1 WHERE team_id IS NULL', [defaultTeamId]);
 
-    // Promover el primer usuario del sistema a superadmin si es admin
+    // Promover explícitamente el usuario administrador principal a superadmin
+    const targetAdminEmail = (process.env.ADMIN_EMAIL || 'admin@empresa.com').toLowerCase().trim();
     await client.query(
-      "UPDATE users SET role = 'superadmin' WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1) AND role = 'admin'"
+      `UPDATE users 
+       SET role = 'superadmin' 
+       WHERE LOWER(email) = $1 
+          OR id = (SELECT id FROM users ORDER BY id ASC LIMIT 1)`,
+      [targetAdminEmail]
     );
 
     console.log('✅ [DATABASE] Esquema e índices de PostgreSQL 16 verificados.');
