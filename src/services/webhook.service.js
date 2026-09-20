@@ -2,6 +2,7 @@ import { channelRepository, contactRepository, conversationRepository, messageRe
 import { normalizerService } from './normalizer.service.js';
 import { socketManager } from '../sockets/index.js';
 import { botService } from './bot.service.js';
+import { automationService } from './automation.service.js';
 import { mediaService } from './media.service.js';
 import { graphApiService } from './graph-api.service.js';
 
@@ -262,16 +263,37 @@ export const webhookService = {
           event.message.timestamp
         );
 
-        // Disparar evaluación y respuesta automática del chatbot si procede
-        try {
-          await botService.handleInboundMessage({
-            channel,
-            contact,
-            conversation,
-            inboundText: event.message.text
-          });
-        } catch (botErr) {
-          console.error(`❌ [BOT SERVICE ERROR] Error al procesar respuesta automática:`, botErr);
+        // Quién contesta depende de AUTOMATION_ENABLED:
+        //
+        //  - Con la automatización encendida manda n8n. Se le reenvía el mensaje
+        //    y él decide qué responder; el saludo interno se calla para que los
+        //    dos no hablen encima.
+        //  - Apagada, sigue el bot de bienvenida de siempre.
+        //
+        // El reenvío va con await pero nunca propaga: si n8n está caído, el
+        // mensaje del cliente ya quedó guardado y la bandeja lo muestra igual.
+        if (automationService.estaActiva()) {
+          try {
+            await automationService.reenviarMensajeEntrante({
+              conversation,
+              contact,
+              channel,
+              message: insertedMessage
+            });
+          } catch (autoErr) {
+            console.error(`❌ [AUTOMATION ERROR] Error al reenviar a n8n:`, autoErr);
+          }
+        } else {
+          try {
+            await botService.handleInboundMessage({
+              channel,
+              contact,
+              conversation,
+              inboundText: event.message.text
+            });
+          } catch (botErr) {
+            console.error(`❌ [BOT SERVICE ERROR] Error al procesar respuesta automática:`, botErr);
+          }
         }
       } else if (event.isEcho) {
         await conversationRepository.updateOutboundMessage(

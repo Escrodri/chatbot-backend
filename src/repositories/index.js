@@ -6,3 +6,5 @@ export { messageRepository } from './message.repository.js';
 export { botRepository } from './bot.repository.js';
 export { logRepository } from './log.repository.js';
 export { conversionRepository } from './conversion.repository.js';
+export { productRepository } from './product.repository.js';
+export { orderRepository } from './order.repository.js';

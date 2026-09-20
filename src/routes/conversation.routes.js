@@ -1,37 +1,45 @@
 import { Router } from 'express';
 import { conversationController } from '../controllers/conversation.controller.js';
 import { requireAuth } from '../middlewares/auth.middleware.js';
+import { requireAuthOrService } from '../middlewares/service-auth.middleware.js';
 
 export const conversationRouter = Router();
 
-// Todas las rutas de mensajería requieren autenticación (operadores y administradores)
-conversationRouter.use(requireAuth);
+// Antes había un `conversationRouter.use(requireAuth)` que cubría todo. Se quitó
+// porque dos rutas las consume también el bot de n8n, que no tiene sesión sino
+// token de servicio. El resto sigue exigiendo sesión humana, declarada ruta por
+// ruta: es más verboso, pero deja a la vista quién entra a cada cosa.
 
 // Listado de chats con filtros por plataforma, canal y búsqueda
-conversationRouter.get('/', conversationController.list);
+conversationRouter.get('/', requireAuth, conversationController.list);
 
 // Detalle de una conversación
-conversationRouter.get('/:id', conversationController.getById);
+conversationRouter.get('/:id', requireAuth, conversationController.getById);
 
 // Historial de mensajes paginado por cursor (Keyset)
-conversationRouter.get('/:id/messages', conversationController.getMessages);
+conversationRouter.get('/:id/messages', requireAuth, conversationController.getMessages);
 
-// Envío de respuesta humana (Handover)
-conversationRouter.post('/:id/messages', conversationController.sendMessage);
+// Envío de mensaje. Lo usan el asesor (sesión) y el bot de n8n (token de
+// servicio). El controlador los distingue: el del bot se guarda con
+// sender_type 'bot' y NO dispara el handover.
+conversationRouter.post('/:id/messages', requireAuthOrService, conversationController.sendMessage);
+
+// El bot levanta la mano y le pasa el chat a una persona
+conversationRouter.post('/:id/handover', requireAuthOrService, conversationController.handover);
 
 // Reintentar el envío de un mensaje que Meta rechazó (conserva el adjunto)
-conversationRouter.post('/:id/messages/:messageId/retry', conversationController.retryMessage);
+conversationRouter.post('/:id/messages/:messageId/retry', requireAuth, conversationController.retryMessage);
 
 // Marcar imagen de una sola vista como visualizada / abierta
-conversationRouter.post('/:id/messages/:messageId/view', conversationController.markMessageViewed);
+conversationRouter.post('/:id/messages/:messageId/view', requireAuth, conversationController.markMessageViewed);
 
 // Marcar que la conversación terminó en venta e informárselo a Meta
-conversationRouter.post('/:id/sale', conversationController.registerSale);
+conversationRouter.post('/:id/sale', requireAuthOrService, conversationController.registerSale);
 
 // Ventas ya registradas en la conversación
-conversationRouter.get('/:id/sales', conversationController.listSales);
+conversationRouter.get('/:id/sales', requireAuth, conversationController.listSales);
 
 // Alternar estado del bot (active, handed_over, disabled)
-conversationRouter.post('/:id/bot-toggle', conversationController.toggleBot);
+conversationRouter.post('/:id/bot-toggle', requireAuth, conversationController.toggleBot);
 
 export default conversationRouter;

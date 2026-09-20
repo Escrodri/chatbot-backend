@@ -6,6 +6,8 @@ import { authRouter } from './auth.routes.js';
 import { settingsRouter } from './settings.routes.js';
 import { teamsRouter } from './teams.routes.js';
 import { conversationRouter } from './conversation.routes.js';
+import { productRouter } from './product.routes.js';
+import { orderRouter } from './order.routes.js';
 import { mediaRouter } from './media.routes.js';
 import { config } from '../config/index.js';
 
@@ -22,6 +24,12 @@ apiRouter.use('/teams', teamsRouter);
 
 // Montar endpoints de mensajería omnicanal
 apiRouter.use('/conversations', conversationRouter);
+
+// Catálogo de productos digitales (panel, web y bot de n8n)
+apiRouter.use('/products', productRouter);
+
+// Pedidos: estado de cada venta (interesado, comprobante, pagado, entregado)
+apiRouter.use('/orders', orderRouter);
 
 // Entrega de archivos multimedia (con sesión y control por canal)
 apiRouter.use('/media', mediaRouter);

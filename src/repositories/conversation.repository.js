@@ -191,10 +191,32 @@ export const conversationRepository = {
         c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id,
         c.source_ad_id,
         ct.name as contact_name, ct.phone_or_username as contact_phone, ct.avatar_url as contact_avatar,
-        ch.platform, ch.name as channel_name, ch.color_tag as channel_color, ch.channel_identifier
+        ch.platform, ch.name as channel_name, ch.color_tag as channel_color, ch.channel_identifier,
+        o.status as order_status, o.id as order_id, o.amount as order_amount, o.currency as order_currency,
+        p.name as order_product_name
       FROM conversations c
       INNER JOIN contacts ct ON c.contact_id = ct.id
       INNER JOIN channels ch ON c.channel_id = ch.id
+      -- Estado de venta de la conversacion, para etiquetarla en la bandeja.
+      -- LATERAL trae solo el pedido mas reciente de cada chat en la MISMA
+      -- consulta: sin esto harian falta N consultas extra, una por conversacion.
+      LEFT JOIN LATERAL (
+        SELECT id, status, amount, currency, product_id
+        FROM orders
+        WHERE conversation_id = c.id
+        ORDER BY
+          -- El que necesita atencion humana manda sobre los demas
+          CASE status
+            WHEN 'comprobante_recibido' THEN 1
+            WHEN 'pagado' THEN 2
+            WHEN 'entregado' THEN 3
+            WHEN 'interesado' THEN 4
+            ELSE 5
+          END,
+          updated_at DESC
+        LIMIT 1
+      ) o ON TRUE
+      LEFT JOIN products p ON o.product_id = p.id
       ${whereClause}
       ORDER BY c.last_message_time DESC
       LIMIT $${pIdx++} OFFSET $${pIdx++}

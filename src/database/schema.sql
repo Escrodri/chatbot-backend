@@ -189,3 +189,74 @@ ALTER TABLE channels ADD COLUMN IF NOT EXISTS conversions_token_encrypted TEXT;
 -- Producto vendido. Va dentro del evento como categoría, y sirve para armar
 -- conversiones personalizadas por producto en el Administrador de eventos.
 ALTER TABLE conversion_events ADD COLUMN IF NOT EXISTS product VARCHAR(200);
+
+-- ==============================================================================
+-- 10. Productos digitales
+--
+-- El catálogo vive acá y en ningún otro lado: la web, el panel y el bot de n8n
+-- leen todos de esta tabla. Antes el catálogo estaba escrito a mano dentro del
+-- flujo de n8n, y cada cambio de precio obligaba a editar el flujo — era
+-- cuestión de tiempo que el bot cotizara un precio viejo.
+--
+-- delivery_url es lo que se entrega DESPUÉS de cobrar (el link del PDF), y por
+-- eso nunca viaja en el endpoint público del catálogo.
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS products (
+    id SERIAL PRIMARY KEY,
+    team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+    slug VARCHAR(120) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT DEFAULT '',
+    price NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    currency VARCHAR(10) NOT NULL DEFAULT 'PYG',
+    delivery_url TEXT,
+    delivery_note TEXT,
+    cover_url TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_products_activos ON products(is_active, sort_order);
+CREATE INDEX IF NOT EXISTS idx_products_team ON products(team_id);
+
+-- Qué producto se vendió en cada conversión, para poder cruzar ventas por producto.
+ALTER TABLE conversion_events ADD COLUMN IF NOT EXISTS product_id INTEGER REFERENCES products(id) ON DELETE SET NULL;
+
+-- ==============================================================================
+-- 11. Pedidos
+--
+-- Responde la pregunta que antes vivía en una planilla de Google: quién pagó y
+-- quién no. Cada conversación que muestra interés genera un pedido, y el pedido
+-- avanza de estado hasta entregarse.
+--
+-- El UNIQUE sobre (conversation_id, product_id) es el "buscar duplicado" del
+-- flujo viejo, pero resuelto por la base en vez de por una búsqueda en la
+-- planilla: la misma persona no puede tener dos pedidos abiertos del mismo
+-- producto, ni cobrarse dos veces por distracción.
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS orders (
+    id SERIAL PRIMARY KEY,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    contact_phone VARCHAR(100),
+    contact_name VARCHAR(255),
+    status VARCHAR(30) NOT NULL DEFAULT 'interesado'
+        CHECK(status IN ('interesado', 'comprobante_recibido', 'pagado', 'entregado', 'rechazado')),
+    amount NUMERIC(14, 2),
+    currency VARCHAR(10) DEFAULT 'PYG',
+    receipt_message_id BIGINT REFERENCES messages(id) ON DELETE SET NULL,
+    receipt_check TEXT,
+    confirmed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    confirmed_at TIMESTAMPTZ,
+    delivered_at TIMESTAMPTZ,
+    note TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(conversation_id, product_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_estado ON orders(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_conv ON orders(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(contact_phone);

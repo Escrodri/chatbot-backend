@@ -111,7 +111,7 @@ export const envConfig = Object.freeze({
       .filter(Boolean),
     verifyToken: (process.env.META_VERIFY_TOKEN || 'meta_webhook_verify_token_secure_2026').trim(),
     loginConfigId: (process.env.META_LOGIN_CONFIG_ID || '').trim(),
-    apiVersion: (process.env.META_API_VERSION || 'v26.0').trim(),
+    apiVersion: (process.env.META_API_VERSION || 'v21.0').trim(),
   },
 
   // API de Conversiones: informarle a Meta las ventas que salen de una
@@ -145,6 +145,21 @@ export const envConfig = Object.freeze({
     // Código de prueba del Administrador de eventos. Con esto los eventos
     // aparecen en "Eventos de prueba" y no ensucian los datos reales.
     testEventCode: (process.env.META_TEST_EVENT_CODE || '').trim(),
+  },
+
+  // Automatización con n8n (opcional).
+  //
+  // Meta manda sus webhooks a UNA sola dirección y esa es este backend. Con la
+  // automatización encendida, después de guardar el mensaje entrante se le
+  // reenvía una copia a n8n, que arma la respuesta y la manda llamando de
+  // vuelta a POST /api/conversations/:id/messages con serviceToken.
+  //
+  // Apagada (o sin webhookUrl), sigue contestando el bot de bienvenida interno.
+  automation: {
+    enabled: (process.env.AUTOMATION_ENABLED || '').trim().toLowerCase() === 'true',
+    webhookUrl: (process.env.N8N_WEBHOOK_URL || '').trim(),
+    serviceToken: (process.env.N8N_SERVICE_TOKEN || '').trim(),
+    timeoutMs: parseInt(process.env.N8N_TIMEOUT_MS || '8000', 10),
   },
 
   // Almacenamiento externo de archivos (opcional).

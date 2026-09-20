@@ -10,31 +10,6 @@ import { mediaService } from '../services/media.service.js';
 import { conversionsService } from '../services/conversions.service.js';
 import { conversionRepository } from '../repositories/conversion.repository.js';
 
-/**
- * Helper de control de acceso estricto IDOR y aislamiento Multi-Tenant:
- * Valida que la conversación pertenezca al equipo del usuario y que, si es operador, tenga el canal asignado.
- */
-async function canUserAccessConversation(user, conv) {
-  if (!user || !conv) return false;
-  if (user.role === 'superadmin') return true;
-
-  if (user.team_id) {
-    const fullChannel = await channelRepository.findById(conv.channel_id);
-    if (!fullChannel || fullChannel.team_id !== user.team_id) {
-      return false;
-    }
-  }
-
-  if (user.role === 'agent') {
-    const assigned = await userRepository.getAssignedChannelIds(user.id);
-    if (!assigned.includes(conv.channel_id)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 export const conversationController = {
   /**
    * Lista conversaciones con filtros, búsqueda y aislamiento IDOR.
@@ -49,10 +24,7 @@ export const conversationController = {
         assignedChannelIds = await userRepository.getAssignedChannelIds(req.user.id);
       }
 
-      const teamId = req.user.role === 'superadmin' ? null : (req.user.team_id || null);
-
       const conversations = await conversationRepository.listWithFilters({
-        teamId,
         platform: platform || null,
         channelId: channel_id ? parseInt(channel_id, 10) : null,
         search: search || null,
@@ -153,9 +125,12 @@ export const conversationController = {
         }
       }
 
-      // Verificación IDOR y Aislamiento Multi-Tenant
-      if (!(await canUserAccessConversation(req.user, conv))) {
-        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
+      // Verificación IDOR
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
       }
 
       conv.window_status = timeUtil.checkMessagingWindow(conv.last_customer_interaction, conv.platform);
@@ -180,9 +155,12 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      // Verificación IDOR y Aislamiento Multi-Tenant
-      if (!(await canUserAccessConversation(req.user, conv))) {
-        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
+      // Verificación IDOR
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
       }
 
       const beforeId = req.query.before_id ? parseInt(req.query.before_id, 10) : null;
@@ -218,7 +196,7 @@ export const conversationController = {
   async sendMessage(req, res) {
     try {
       const id = parseInt(req.params.id, 10);
-      const { text, fileBase64, fileName, mimeType, isViewOnce } = req.body;
+      const { text, fileBase64, fileName, mimeType, view_once } = req.body;
 
       if (isNaN(id)) {
         return res.status(400).json({ error: 'ID de conversación inválido' });
@@ -233,9 +211,12 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      // Verificación IDOR y Aislamiento Multi-Tenant
-      if (!(await canUserAccessConversation(req.user, conv))) {
-        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
+      // Verificación IDOR
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
       }
 
       // 0. Si se adjuntó un archivo, procesarlo y guardarlo
@@ -257,30 +238,37 @@ export const conversationController = {
 
       const contentType = savedMedia ? savedMedia.contentType : 'text';
       const mediaUrl = savedMedia ? savedMedia.localUrl : null;
-      let defaultMediaText = '';
-      if (savedMedia) {
-        defaultMediaText = savedMedia.contentType === 'audio' ? '🎵 [Nota de voz / Audio]' : (savedMedia.contentType === 'image' ? '' : `[Archivo: ${savedMedia.fileName}]`);
-      }
+      const defaultMediaText = savedMedia ? (savedMedia.contentType === 'audio' ? '🎵 [Nota de voz / Audio]' : `[Archivo: ${savedMedia.fileName}]`) : '';
       const messageText = (text || defaultMediaText).trim();
+
+      // Por esta misma ruta entran dos remitentes muy distintos: un asesor con
+      // sesión, y el bot de n8n con token de servicio. Se distinguen porque el
+      // middleware marca al segundo con role 'service'.
+      const esBot = req.user?.role === 'service';
 
       // 1. Persistir mensaje en base de datos
       const inserted = await messageRepository.insertMessage({
         conversationId: conv.id,
         channelId: conv.channel_id,
         direction: 'outbound',
-        senderType: 'agent',
-        senderUserId: req.user.id,
+        senderType: esBot ? 'bot' : 'agent',
+        senderUserId: esBot ? null : req.user.id,
         contentType,
         text: messageText,
         mediaUrl,
         mediaMime: savedMedia ? (savedMedia.mimeType || (contentType === 'image' ? 'image/jpeg' : null)) : null,
         status: 'pending',
-        isViewOnce: false
+        viewOnce: view_once && contentType === 'image'
       });
-      inserted.sender_user_name = req.user.name || 'Operador';
+      inserted.sender_user_name = esBot ? 'Asistente' : (req.user.name || 'Operador');
 
-      // 2. Protocolo Handover: Pausar el bot para este chat
-      await conversationRepository.updateBotStatus(conv.id, 'handed_over', req.user.id);
+      // 2. Protocolo Handover: que una PERSONA escriba significa que tomó el
+      //    chat, y el bot se calla. Que escriba el bot no significa nada de eso:
+      //    si acá también se marcara handed_over, el bot se apagaría a sí mismo
+      //    con su primera respuesta y no volvería a contestar nunca.
+      if (!esBot) {
+        await conversationRepository.updateBotStatus(conv.id, 'handed_over', req.user.id);
+      }
       await conversationRepository.updateOutboundMessage(conv.id, messageText);
 
       // 3. Despacho hacia Meta Graph API.
@@ -310,7 +298,8 @@ export const conversationController = {
             fileName: savedMedia?.fileName,
             localFilePath: savedMedia?.filePath,
             mimeType: savedMedia?.mimeType,
-            lastCustomerInteraction: conv.last_customer_interaction
+            lastCustomerInteraction: conv.last_customer_interaction,
+            viewOnce: view_once && contentType === 'image'
           });
           metaMessageId = sendResult?.metaMessageId || null;
 
@@ -382,9 +371,12 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      // Verificación IDOR y Aislamiento Multi-Tenant
-      if (!(await canUserAccessConversation(req.user, conv))) {
-        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
+      // Verificación IDOR: un operador solo actúa sobre sus canales.
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
       }
 
       const mensaje = await messageRepository.findByIdWithChannel(messageId);
@@ -425,9 +417,8 @@ export const conversationController = {
           mediaUrl: mensaje.media_url || null,
           contentType: mensaje.content_type || 'text',
           fileName: nombreArchivo,
-          mimeType: mensaje.media_mime || null,
           lastCustomerInteraction: conv.last_customer_interaction,
-          isViewOnce: Boolean(mensaje.is_view_once)
+          viewOnce: mensaje.view_once || false
         });
         metaMessageId = sendResult?.metaMessageId || null;
 
@@ -464,51 +455,6 @@ export const conversationController = {
   },
 
   /**
-   * Marca una imagen de una sola vista como visualizada / abierta.
-   * POST /api/conversations/:id/messages/:messageId/view
-   */
-  async markMessageViewed(req, res) {
-    try {
-      const id = parseInt(req.params.id, 10);
-      const messageId = parseInt(req.params.messageId, 10);
-
-      if (isNaN(id) || isNaN(messageId)) {
-        return res.status(400).json({ error: 'Identificadores inválidos' });
-      }
-
-      const conv = await conversationRepository.findById(id);
-      if (!conv) {
-        return res.status(404).json({ error: 'Conversación no encontrada' });
-      }
-
-      if (!(await canUserAccessConversation(req.user, conv))) {
-        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
-      }
-
-      const msg = await messageRepository.findByIdWithChannel(messageId);
-      if (!msg || msg.conversation_id !== conv.id) {
-        return res.status(404).json({ error: 'Mensaje no encontrado en esta conversación' });
-      }
-
-      const updated = await messageRepository.markMessageAsViewed(messageId);
-
-      // Notificar a todos los operadores en la sala del canal
-      socketManager.emitMessageViewed(conv.channel_id, {
-        conversationId: conv.id,
-        messageId,
-        viewed_at: updated?.viewed_at || new Date()
-      });
-
-      return res.json({
-        success: true,
-        message: updated
-      });
-    } catch (error) {
-      return res.status(500).json({ error: 'Error al marcar imagen como vista: ' + error.message });
-    }
-  },
-
-  /**
    * Marca que una conversación terminó en venta y se lo informa a Meta.
    *
    * La venta queda registrada en la base pase lo que pase. Que Meta la acepte o
@@ -541,9 +487,12 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      // Verificación IDOR y Aislamiento Multi-Tenant
-      if (!(await canUserAccessConversation(req.user, conv))) {
-        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
+      // Verificación IDOR: un operador solo actúa sobre sus canales.
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
       }
 
       // 1. Registrar la venta antes de hablar con Meta.
@@ -612,8 +561,11 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      if (!(await canUserAccessConversation(req.user, conv))) {
-        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
       }
 
       const ventas = await conversionRepository.listByConversation(id);
@@ -644,10 +596,6 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      if (!(await canUserAccessConversation(req.user, conv))) {
-        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
-      }
-
       await conversationRepository.updateBotStatus(id, botStatus, req.user.id);
 
       socketManager.emitConversationUpdated(conv.channel_id, {
@@ -658,6 +606,80 @@ export const conversationController = {
       return res.json({ success: true, botStatus });
     } catch (error) {
       return res.status(500).json({ error: 'Error al cambiar estado del bot: ' + error.message });
+    }
+  },
+
+  /**
+   * El bot pide ayuda: pasa la conversación a una persona.
+   *
+   * Lo llama n8n cuando llega algo que no debe resolver solo — un comprobante
+   * de pago, un reclamo, un pedido de reembolso. Deja el chat en 'handed_over'
+   * (así el bot deja de contestar), avisa a los asesores por WebSocket y, si
+   * viene `note`, la deja escrita en el hilo como mensaje de sistema para que
+   * el asesor que entra sepa por qué le llegó.
+   *
+   * POST /api/conversations/:id/handover
+   */
+  async handover(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: 'ID de conversación inválido' });
+      }
+
+      const { reason = null, note = null } = req.body || {};
+
+      const conv = await conversationRepository.findById(id);
+      if (!conv) {
+        return res.status(404).json({ error: 'Conversación no encontrada' });
+      }
+
+      // Ya estaba en manos de una persona: no hay nada que hacer, y devolver
+      // 200 evita que n8n reintente en loop por un "error" que no lo es.
+      if (conv.bot_status === 'handed_over') {
+        return res.json({ success: true, botStatus: 'handed_over', yaEstaba: true });
+      }
+
+      await conversationRepository.updateBotStatus(id, 'handed_over', null);
+
+      const motivos = {
+        comprobante_recibido: '🧾 El cliente envió un comprobante de pago. Verificalo en el banco antes de entregar el producto.',
+        reclamo: '⚠️ El cliente presentó un reclamo. Requiere atención humana.',
+        reembolso: '⚠️ El cliente pidió un reembolso.',
+        fuera_de_alcance: '❓ El asistente no supo resolver la consulta.'
+      };
+
+      const textoSistema = note || motivos[reason] || '👤 El asistente pasó la conversación a un asesor.';
+
+      let mensajeSistema = null;
+      try {
+        mensajeSistema = await messageRepository.insertMessage({
+          conversationId: id,
+          channelId: conv.channel_id,
+          direction: 'outbound',
+          senderType: 'bot',
+          senderUserId: null,
+          contentType: 'system',
+          text: textoSistema,
+          status: 'sent'
+        });
+      } catch (notaErr) {
+        // La nota es una comodidad, no el objetivo: si falla, el handover vale igual.
+        console.warn('⚠️ [HANDOVER] No se pudo dejar la nota de sistema:', notaErr.message);
+      }
+
+      socketManager.emitConversationUpdated(conv.channel_id, {
+        id,
+        bot_status: 'handed_over'
+      });
+
+      if (mensajeSistema) {
+        socketManager.emitMessageSent(conv.channel_id, mensajeSistema);
+      }
+
+      return res.json({ success: true, botStatus: 'handed_over', reason });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al pasar a un asesor: ' + error.message });
     }
   }
 };
