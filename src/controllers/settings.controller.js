@@ -280,10 +280,25 @@ export const settingsController = {
    * Obtiene la configuración pública de la App de Meta (App ID) para OAuth.
    */
   async getMetaAppInfo(req, res) {
+    let appId = envConfig.meta.facebookAppId || envConfig.meta.appId || '';
+    let hasFacebookAppSecret = Boolean(envConfig.meta.facebookAppSecret || envConfig.meta.appSecret);
+
+    if (!appId) {
+      try {
+        const channels = await channelRepository.listAll();
+        const chWithApp = channels.find(c => c.app_id);
+        if (chWithApp?.app_id) {
+          appId = chWithApp.app_id;
+        }
+      } catch (e) {
+        // Fallback silencioso
+      }
+    }
+
     return res.json({
-      appId: envConfig.meta.facebookAppId || envConfig.meta.appId || '',
-      facebookAppId: envConfig.meta.facebookAppId || '',
-      hasFacebookAppSecret: Boolean(envConfig.meta.facebookAppSecret),
+      appId,
+      facebookAppId: appId,
+      hasFacebookAppSecret,
       loginConfigId: envConfig.meta.loginConfigId || '',
       verifyToken: envConfig.meta.verifyToken || 'meta_webhook_verify_token_secure_2026',
       apiVersion: envConfig.meta.apiVersion || 'v26.0'
