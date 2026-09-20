@@ -16,7 +16,7 @@ export const settingsController = {
    */
   async getChannels(req, res) {
     try {
-      const teamId = req.user?.team_id || 1;
+      const teamId = req.query.team_id || req.user?.team_id || 1;
       const channels = await channelRepository.listAll(teamId);
       return res.json(channels);
     } catch (error) {
@@ -29,6 +29,7 @@ export const settingsController = {
    */
   async createChannel(req, res) {
     try {
+      const teamId = req.body.teamId || req.user?.team_id || 1;
       const { platform, name, channelIdentifier, appId, appSecret, accessToken, colorTag } = req.body;
 
       if (!platform || !['whatsapp', 'facebook', 'instagram'].includes(platform)) {
@@ -43,17 +44,21 @@ export const settingsController = {
         return res.status(400).json({ error: 'El identificador del canal (phone_number_id o page_id) es obligatorio' });
       }
 
+      const cleanIdentifier = String(channelIdentifier).trim().replace(/\s+/g, '');
+
       if (!accessToken || !accessToken.trim()) {
         return res.status(400).json({ error: 'El token de acceso de Meta Graph API es obligatorio' });
       }
 
       // Verificar si el identificador ya existe (activo o archivado)
-      const existingAny = await channelRepository.findAnyByIdentifier(channelIdentifier.trim());
+      const existingAny = await channelRepository.findAnyByIdentifier(cleanIdentifier);
       if (existingAny) {
         if (!existingAny.deleted_at) {
-          // Si ya existe activo, actualizar credenciales (App ID, App Secret, Token) de forma transparente
+          // Si ya existe activo, actualizar credenciales (App ID, App Secret, Token, Team) de forma transparente
           const updated = await channelRepository.update(existingAny.id, {
+            teamId: existingAny.team_id || teamId,
             name: name.trim(),
+            channelIdentifier: cleanIdentifier,
             accessToken: accessToken.trim(),
             appId: appId ? appId.trim() : null,
             appSecret: appSecret ? appSecret.trim() : null,
@@ -65,7 +70,7 @@ export const settingsController = {
             try {
               const apiVersion = envConfig.meta.apiVersion || 'v26.0';
               await fetch(
-                `https://graph.facebook.com/${apiVersion}/${channelIdentifier.trim()}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${accessToken.trim()}`,
+                `https://graph.facebook.com/${apiVersion}/${cleanIdentifier}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${accessToken.trim()}`,
                 { method: 'POST' }
               );
             } catch {}
@@ -76,6 +81,7 @@ export const settingsController = {
 
         // Si estaba archivado/eliminado previamente, restaurarlo y reconectar todo su historial intacto
         const restored = await channelRepository.restoreAndReactivate(existingAny.id, {
+          teamId: existingAny.team_id || teamId,
           name: name.trim(),
           accessToken: accessToken.trim(),
           appId: appId ? appId.trim() : null,
@@ -86,9 +92,10 @@ export const settingsController = {
       }
 
       const newChannel = await channelRepository.create({
+        teamId,
         platform,
         name: name.trim(),
-        channelIdentifier: channelIdentifier.trim(),
+        channelIdentifier: cleanIdentifier,
         appId: appId ? appId.trim() : null,
         appSecret: appSecret ? appSecret.trim() : null,
         accessToken: accessToken.trim(),
@@ -100,7 +107,7 @@ export const settingsController = {
         try {
           const apiVersion = envConfig.meta.apiVersion || 'v26.0';
           await fetch(
-            `https://graph.facebook.com/${apiVersion}/${channelIdentifier.trim()}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${accessToken.trim()}`,
+            `https://graph.facebook.com/${apiVersion}/${cleanIdentifier}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${accessToken.trim()}`,
             { method: 'POST' }
           );
         } catch {}

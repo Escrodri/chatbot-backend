@@ -12,7 +12,7 @@ export const channelRepository = {
    * @param {{ platform: string, name: string, channelIdentifier: string, appId?: string, appSecret?: string, accessToken: string, colorTag?: string }} data
    * @returns {Promise<object>}
    */
-  async create({ platform, name, channelIdentifier, appId = null, appSecret = null, accessToken, colorTag = '#25D366' }) {
+  async create({ teamId = 1, platform, name, channelIdentifier, appId = null, appSecret = null, accessToken, colorTag = '#25D366' }) {
     // 1. Cifrar Access Token con AES-256-GCM
     const encryptedToken = encryptSecret(accessToken);
 
@@ -25,12 +25,13 @@ export const channelRepository = {
 
     const { rows } = await query(
       `INSERT INTO channels (
-         platform, name, channel_identifier, app_id, 
+         team_id, platform, name, channel_identifier, app_id, 
          app_secret_encrypted, access_token_encrypted, token_iv, token_tag, color_tag
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, platform, name, channel_identifier, app_id, color_tag, status, created_at, updated_at`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, team_id, platform, name, channel_identifier, app_id, color_tag, status, created_at, updated_at`,
       [
+        teamId || 1,
         platform,
         name.trim(),
         channelIdentifier.trim(),
@@ -150,6 +151,14 @@ export const channelRepository = {
    * @returns {Promise<Array>}
    */
   async listAll(teamId) {
+    if (teamId) {
+      try {
+        await query(`UPDATE channels SET team_id = $1 WHERE team_id IS NULL`, [teamId]);
+      } catch (err) {
+        console.warn('⚠️ [CHANNELS] Auto-heal team_id:', err.message);
+      }
+    }
+
     let sql = `SELECT id, team_id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at,
               dataset_id, waba_id, 
               (app_secret_encrypted IS NOT NULL) AS tiene_app_secret,
@@ -158,7 +167,7 @@ export const channelRepository = {
        WHERE deleted_at IS NULL`;
     const params = [];
     if (teamId) {
-      sql += ` AND team_id = $1`;
+      sql += ` AND (team_id = $1 OR team_id IS NULL)`;
       params.push(teamId);
     }
     sql += ` ORDER BY id ASC`;
@@ -230,11 +239,15 @@ export const channelRepository = {
    * @param {{ name?: string, channelIdentifier?: string, colorTag?: string, status?: 'active'|'error'|'paused', accessToken?: string, appId?: string, appSecret?: string }} data 
    * @returns {Promise<object|null>}
    */
-  async update(id, { name, channelIdentifier, colorTag, status, accessToken, appId, appSecret, datasetId, conversionsToken } = {}) {
+  async update(id, { teamId, name, channelIdentifier, colorTag, status, accessToken, appId, appSecret, datasetId, conversionsToken } = {}) {
     const fields = [];
     const values = [];
     let idx = 1;
 
+    if (teamId !== undefined && teamId !== null) {
+      fields.push(`team_id = $${idx++}`);
+      values.push(teamId);
+    }
     if (name !== undefined) {
       fields.push(`name = $${idx++}`);
       values.push(name.trim());
@@ -290,7 +303,7 @@ export const channelRepository = {
 
     if (fields.length === 0) {
       const { rows } = await query(
-        `SELECT id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at,
+        `SELECT id, team_id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at,
               dataset_id, waba_id, (conversions_token_encrypted IS NOT NULL) AS tiene_token_conversiones 
          FROM channels WHERE id = $1`,
         [id]
@@ -305,7 +318,7 @@ export const channelRepository = {
       `UPDATE channels 
        SET ${fields.join(', ')} 
        WHERE id = $${idx}
-       RETURNING id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at`,
+       RETURNING id, team_id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at`,
       values
     );
 
@@ -347,7 +360,7 @@ export const channelRepository = {
   /**
    * Restaura y reactiva un canal previamente archivado conservando su ID y todo su historial de chats.
    */
-  async restoreAndReactivate(id, { name, accessToken, appId = null, appSecret = null, colorTag = '#25D366' }) {
+  async restoreAndReactivate(id, { teamId = null, name, accessToken, appId = null, appSecret = null, colorTag = '#25D366' }) {
     const encryptedToken = encryptSecret(accessToken);
     let encryptedSecretJson = null;
     if (appSecret) {
@@ -361,9 +374,10 @@ export const channelRepository = {
            app_id = COALESCE($5, app_id),
            app_secret_encrypted = COALESCE($6, app_secret_encrypted),
            color_tag = COALESCE($7, color_tag),
+           team_id = COALESCE($8, team_id, 1),
            status = 'active', error_message = NULL, deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $8
-       RETURNING id, platform, name, channel_identifier, app_id, color_tag, status, created_at, updated_at`,
+       WHERE id = $9
+       RETURNING id, team_id, platform, name, channel_identifier, app_id, color_tag, status, created_at, updated_at`,
       [
         name.trim(),
         encryptedToken.cipherText,
@@ -372,6 +386,7 @@ export const channelRepository = {
         appId ? appId.trim() : null,
         encryptedSecretJson,
         colorTag,
+        teamId,
         id
       ]
     );
