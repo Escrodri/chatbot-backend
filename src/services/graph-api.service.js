@@ -121,9 +121,7 @@ export const graphApiService = {
       }
     }
 
-    const effectiveText = isViewOnce
-      ? (text ? `① [1 sola vista] ${text}` : '① Foto (Ver una sola vez)')
-      : text;
+    const effectiveText = text ? text.trim() : '';
 
     // 1. WHATSAPP CLOUD API
     if (channel.platform === 'whatsapp') {

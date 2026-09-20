@@ -258,10 +258,8 @@ export const conversationController = {
       const contentType = savedMedia ? savedMedia.contentType : 'text';
       const mediaUrl = savedMedia ? savedMedia.localUrl : null;
       let defaultMediaText = '';
-      if (isViewOnce) {
-        defaultMediaText = '① Foto';
-      } else if (savedMedia) {
-        defaultMediaText = savedMedia.contentType === 'audio' ? '🎵 [Nota de voz / Audio]' : `[Archivo: ${savedMedia.fileName}]`;
+      if (savedMedia) {
+        defaultMediaText = savedMedia.contentType === 'audio' ? '🎵 [Nota de voz / Audio]' : (savedMedia.contentType === 'image' ? '' : `[Archivo: ${savedMedia.fileName}]`);
       }
       const messageText = (text || defaultMediaText).trim();
 
@@ -277,7 +275,7 @@ export const conversationController = {
         mediaUrl,
         mediaMime: savedMedia ? (savedMedia.mimeType || (contentType === 'image' ? 'image/jpeg' : null)) : null,
         status: 'pending',
-        isViewOnce: Boolean(isViewOnce)
+        isViewOnce: false
       });
       inserted.sender_user_name = req.user.name || 'Operador';
 
@@ -312,8 +310,7 @@ export const conversationController = {
             fileName: savedMedia?.fileName,
             localFilePath: savedMedia?.filePath,
             mimeType: savedMedia?.mimeType,
-            lastCustomerInteraction: conv.last_customer_interaction,
-            isViewOnce: Boolean(isViewOnce)
+            lastCustomerInteraction: conv.last_customer_interaction
           });
           metaMessageId = sendResult?.metaMessageId || null;
 
