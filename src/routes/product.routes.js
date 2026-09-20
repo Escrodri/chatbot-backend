@@ -13,6 +13,7 @@ productRouter.get('/', requireAuthOrService, productController.list);
 productRouter.get('/:id/delivery', requireAuthOrService, productController.getDelivery);
 
 // Alta, edición y baja: solo administradores con sesión.
+productRouter.post('/upload-image', requireAuthOrService, requireAdmin, productController.uploadImage);
 productRouter.post('/', requireAuthOrService, requireAdmin, productController.create);
 productRouter.put('/:id', requireAuthOrService, requireAdmin, productController.update);
 productRouter.delete('/:id', requireAuthOrService, requireAdmin, productController.remove);

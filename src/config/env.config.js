@@ -77,6 +77,10 @@ validateEnv();
 
 export const envConfig = Object.freeze({
   port: parseInt(process.env.PORT || '3000', 10),
+
+  // Direccion publica de este backend. La usan Meta para bajar los adjuntos
+  // y n8n para bajar la portada de los productos.
+  publicUrl: (process.env.BACKEND_PUBLIC_URL || '').trim(),
   nodeEnv: process.env.NODE_ENV || 'development',
   isDev: (process.env.NODE_ENV || 'development') === 'development',
   isProd: process.env.NODE_ENV === 'production',

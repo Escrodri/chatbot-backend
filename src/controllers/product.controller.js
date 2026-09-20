@@ -1,4 +1,6 @@
 import { productRepository } from '../repositories/product.repository.js';
+import { mediaService } from '../services/media.service.js';
+import { config } from '../config/index.js';
 
 /** Formatea un monto con separadores locales (Gs. 35.000). */
 function formatearMonto(valor, moneda = 'PYG') {
@@ -94,6 +96,54 @@ export const productController = {
       });
     } catch (error) {
       return res.status(500).json({ error: 'Error al obtener la entrega: ' + error.message });
+    }
+  },
+
+  /**
+   * Sube la imagen de portada de un producto.
+   *
+   * Reusa exactamente la misma tuberia que las imagenes del chat
+   * (mediaService.saveBase64Media + respaldar), en vez de pedirle al admin que
+   * consiga una URL publica por su cuenta. Si hay Cloudinary configurado el
+   * archivo termina ahi; si no, queda en /uploads, que ya se sirve publico
+   * porque Meta necesita poder descargarlo.
+   *
+   * POST /api/products/upload-image
+   */
+  async uploadImage(req, res) {
+    try {
+      const { fileBase64, fileName, mimeType } = req.body || {};
+
+      if (!fileBase64) {
+        return res.status(400).json({ error: 'No se recibió ninguna imagen' });
+      }
+
+      // La portada la termina mostrando WhatsApp: solo imagenes, y solo los
+      // formatos que Meta acepta sin convertir.
+      const tipo = String(mimeType || '').toLowerCase();
+      if (!tipo.startsWith('image/')) {
+        return res.status(400).json({ error: 'El archivo debe ser una imagen' });
+      }
+      if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(tipo)) {
+        return res.status(400).json({ error: 'Formato no admitido. Usá JPG, PNG o WebP.' });
+      }
+
+      let guardado = await mediaService.saveBase64Media({ fileBase64, fileName, mimeType });
+      guardado = await mediaService.respaldar(guardado);
+
+      // n8n y Meta descargan esta imagen desde afuera: tiene que ser absoluta.
+      const url = /^https?:\/\//i.test(guardado.localUrl)
+        ? guardado.localUrl
+        : `${(config.publicUrl || '').replace(/\/+$/, '')}${guardado.localUrl}`;
+
+      return res.status(201).json({
+        url,
+        fileName: guardado.fileName || fileName,
+        mimeType: guardado.mimeType || mimeType,
+        enCloudinary: Boolean(guardado.remoteUrl)
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al subir la imagen: ' + error.message });
     }
   },
 
