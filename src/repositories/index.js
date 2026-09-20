@@ -8,3 +8,4 @@ export { logRepository } from './log.repository.js';
 export { conversionRepository } from './conversion.repository.js';
 export { productRepository } from './product.repository.js';
 export { orderRepository } from './order.repository.js';
+export { tagRepository } from './tag.repository.js';

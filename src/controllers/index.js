@@ -7,3 +7,5 @@ export { settingsController } from './settings.controller.js';
 export { testController } from './test.controller.js';
 export { webhookController } from './webhook.controller.js';
 export { orderController } from './order.controller.js';
+export { contactController } from './contact.controller.js';
+export { tagController } from './tag.controller.js';

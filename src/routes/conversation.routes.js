@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { conversationController } from '../controllers/conversation.controller.js';
 import { requireAuth } from '../middlewares/auth.middleware.js';
 import { requireAuthOrService } from '../middlewares/service-auth.middleware.js';
+import { tagController } from '../controllers/tag.controller.js';
 
 export const conversationRouter = Router();
 
@@ -35,6 +36,11 @@ conversationRouter.post('/:id/sale', requireAuthOrService, conversationControlle
 
 // Ventas ya registradas en la conversación
 conversationRouter.get('/:id/sales', requireAuth, conversationController.listSales);
+
+// Etiquetas puestas a mano por el equipo (distintas del estado de venta)
+conversationRouter.get('/:id/tags', requireAuth, tagController.listForConversation);
+conversationRouter.post('/:id/tags', requireAuth, tagController.assign);
+conversationRouter.delete('/:id/tags/:tagId', requireAuth, tagController.unassign);
 
 // Alternar estado del bot (active, handed_over, disabled)
 conversationRouter.post('/:id/bot-toggle', requireAuth, conversationController.toggleBot);

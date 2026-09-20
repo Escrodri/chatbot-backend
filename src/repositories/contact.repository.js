@@ -44,6 +44,99 @@ export const contactRepository = {
   },
 
   /**
+   * Listado de contactos reales, con su última actividad.
+   *
+   * Los contactos de este sistema no se cargan a mano: aparecen cuando alguien
+   * escribe por WhatsApp, Messenger o Instagram. Por eso esto es una consulta y
+   * no un CRUD — el directorio refleja quién te habló, no una lista que alguien
+   * mantiene.
+   */
+  async listWithFilters({ teamId = null, platform = null, search = null, assignedChannelIds = null, limit = 200, offset = 0 } = {}) {
+    const condiciones = ['ch.deleted_at IS NULL'];
+    const params = [];
+    let i = 1;
+
+    if (teamId) { condiciones.push(`ch.team_id = $${i++}`); params.push(teamId); }
+
+    if (assignedChannelIds && Array.isArray(assignedChannelIds)) {
+      if (assignedChannelIds.length === 0) return [];
+      condiciones.push(`ct.channel_id = ANY($${i++})`);
+      params.push(assignedChannelIds);
+    }
+
+    if (platform) { condiciones.push(`ct.platform = $${i++}`); params.push(platform); }
+
+    if (search) {
+      condiciones.push(`(ct.name ILIKE $${i} OR ct.phone_or_username ILIKE $${i} OR ct.platform_user_id ILIKE $${i})`);
+      params.push(`%${search.trim()}%`);
+      i++;
+    }
+
+    params.push(Math.min(limit, 500));
+    params.push(offset);
+
+    const { rows } = await query(
+      `SELECT
+         ct.id, ct.channel_id, ct.platform, ct.platform_user_id,
+         ct.name, ct.phone_or_username, ct.avatar_url, ct.created_at,
+         ch.name AS channel_name,
+         c.id AS conversation_id,
+         c.last_message_time,
+         c.last_message_text,
+         o.status AS order_status
+       FROM contacts ct
+       INNER JOIN channels ch ON ct.channel_id = ch.id
+       LEFT JOIN LATERAL (
+         SELECT id, last_message_time, last_message_text
+         FROM conversations
+         WHERE contact_id = ct.id
+         ORDER BY last_message_time DESC
+         LIMIT 1
+       ) c ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT status FROM orders
+         WHERE conversation_id = c.id
+         ORDER BY updated_at DESC
+         LIMIT 1
+       ) o ON TRUE
+       WHERE ${condiciones.join(' AND ')}
+       ORDER BY c.last_message_time DESC NULLS LAST, ct.id DESC
+       LIMIT $${i++} OFFSET $${i++}`,
+      params
+    );
+    return rows;
+  },
+
+  /** Totales por plataforma, para la cabecera del directorio. */
+  async stats({ teamId = null, assignedChannelIds = null } = {}) {
+    const condiciones = ['ch.deleted_at IS NULL'];
+    const params = [];
+    let i = 1;
+
+    if (teamId) { condiciones.push(`ch.team_id = $${i++}`); params.push(teamId); }
+
+    if (assignedChannelIds && Array.isArray(assignedChannelIds)) {
+      if (assignedChannelIds.length === 0) return { total: 0, porPlataforma: [] };
+      condiciones.push(`ct.channel_id = ANY($${i++})`);
+      params.push(assignedChannelIds);
+    }
+
+    const { rows } = await query(
+      `SELECT ct.platform, COUNT(*)::int AS cantidad
+       FROM contacts ct
+       INNER JOIN channels ch ON ct.channel_id = ch.id
+       WHERE ${condiciones.join(' AND ')}
+       GROUP BY ct.platform`,
+      params
+    );
+
+    return {
+      total: rows.reduce((acc, r) => acc + r.cantidad, 0),
+      porPlataforma: rows
+    };
+  },
+
+  /**
    * Actualiza el perfil enriquecido de un contacto (nombre, username, avatar).
    */
   async updateProfile(id, { name = null, phoneOrUsername = null, avatarUrl = null }) {

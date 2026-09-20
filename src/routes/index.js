@@ -8,6 +8,8 @@ import { teamsRouter } from './teams.routes.js';
 import { conversationRouter } from './conversation.routes.js';
 import { productRouter } from './product.routes.js';
 import { orderRouter } from './order.routes.js';
+import { contactRouter } from './contact.routes.js';
+import { tagRouter } from './tag.routes.js';
 import { mediaRouter } from './media.routes.js';
 import { config } from '../config/index.js';
 
@@ -30,6 +32,12 @@ apiRouter.use('/products', productRouter);
 
 // Pedidos: estado de cada venta (interesado, comprobante, pagado, entregado)
 apiRouter.use('/orders', orderRouter);
+
+// Directorio de contactos (solo lectura sobre la tabla real)
+apiRouter.use('/contacts', contactRouter);
+
+// Etiquetas de conversación, compartidas por equipo
+apiRouter.use('/tags', tagRouter);
 
 // Entrega de archivos multimedia (con sesión y control por canal)
 apiRouter.use('/media', mediaRouter);

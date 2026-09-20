@@ -260,3 +260,35 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_estado ON orders(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_conv ON orders(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(contact_phone);
+
+-- ==============================================================================
+-- 12. Etiquetas de conversación
+--
+-- Antes vivían en el localStorage del navegador: cada asesor veía las suyas y
+-- nadie veía las de los demás. Acá son del EQUIPO, así que el que abre el chat
+-- ve lo que marcó su compañero, desde cualquier dispositivo.
+--
+-- Son distintas del estado de venta (tabla orders): ese lo maneja el sistema.
+-- Estas las pone una persona para lo que el sistema no sabe.
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS tags (
+    id SERIAL PRIMARY KEY,
+    team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+    name VARCHAR(60) NOT NULL,
+    color VARCHAR(20) NOT NULL DEFAULT '#6b7280',
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(team_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS conversation_tags (
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    assigned_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    assigned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (conversation_id, tag_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tags_team ON tags(team_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_conversation_tags_conv ON conversation_tags(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_tags_tag ON conversation_tags(tag_id);

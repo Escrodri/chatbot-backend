@@ -193,7 +193,8 @@ export const conversationRepository = {
         ct.name as contact_name, ct.phone_or_username as contact_phone, ct.avatar_url as contact_avatar,
         ch.platform, ch.name as channel_name, ch.color_tag as channel_color, ch.channel_identifier,
         o.status as order_status, o.id as order_id, o.amount as order_amount, o.currency as order_currency,
-        p.name as order_product_name
+        p.name as order_product_name,
+        COALESCE(tg.tags, '[]'::json) as tags
       FROM conversations c
       INNER JOIN contacts ct ON c.contact_id = ct.id
       INNER JOIN channels ch ON c.channel_id = ch.id
@@ -217,6 +218,15 @@ export const conversationRepository = {
         LIMIT 1
       ) o ON TRUE
       LEFT JOIN products p ON o.product_id = p.id
+      -- Etiquetas manuales del equipo. Van agregadas como JSON en la misma
+      -- consulta para no disparar una por conversacion al pintar la lista.
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color)
+                        ORDER BY t.sort_order, t.name) AS tags
+        FROM conversation_tags ct2
+        INNER JOIN tags t ON ct2.tag_id = t.id
+        WHERE ct2.conversation_id = c.id
+      ) tg ON TRUE
       ${whereClause}
       ORDER BY c.last_message_time DESC
       LIMIT $${pIdx++} OFFSET $${pIdx++}
