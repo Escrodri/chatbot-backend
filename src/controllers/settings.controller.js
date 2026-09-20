@@ -61,7 +61,7 @@ export const settingsController = {
           // Intentar suscribir webhook a la página o cuenta
           if (platform === 'facebook' || platform === 'instagram') {
             try {
-              const apiVersion = envConfig.meta.apiVersion || 'v21.0';
+              const apiVersion = envConfig.meta.apiVersion || 'v26.0';
               await fetch(
                 `https://graph.facebook.com/${apiVersion}/${channelIdentifier.trim()}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${accessToken.trim()}`,
                 { method: 'POST' }
@@ -96,7 +96,7 @@ export const settingsController = {
       // Intentar suscribir webhook a la página o cuenta en Meta
       if (platform === 'facebook' || platform === 'instagram') {
         try {
-          const apiVersion = envConfig.meta.apiVersion || 'v21.0';
+          const apiVersion = envConfig.meta.apiVersion || 'v26.0';
           await fetch(
             `https://graph.facebook.com/${apiVersion}/${channelIdentifier.trim()}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${accessToken.trim()}`,
             { method: 'POST' }
@@ -170,7 +170,7 @@ export const settingsController = {
         return res.status(404).json({ error: 'Canal no encontrado' });
       }
 
-      const apiVersion = envConfig.meta.apiVersion || 'v21.0';
+      const apiVersion = envConfig.meta.apiVersion || 'v26.0';
       let metaData = null;
       let lastError = null;
 
@@ -286,7 +286,7 @@ export const settingsController = {
       hasFacebookAppSecret: Boolean(envConfig.meta.facebookAppSecret),
       loginConfigId: envConfig.meta.loginConfigId || '',
       verifyToken: envConfig.meta.verifyToken || 'meta_webhook_verify_token_secure_2026',
-      apiVersion: envConfig.meta.apiVersion || 'v21.0'
+      apiVersion: envConfig.meta.apiVersion || 'v26.0'
     });
   },
 
@@ -316,7 +316,7 @@ export const settingsController = {
         });
       }
 
-      const apiVersion = envConfig.meta.apiVersion || 'v21.0';
+      const apiVersion = envConfig.meta.apiVersion || 'v26.0';
 
       // En el flujo del SDK de JavaScript el redirect_uri va vacío.
       const params = new URLSearchParams({
@@ -367,7 +367,7 @@ export const settingsController = {
         });
       }
 
-      const apiVersion = envConfig.meta.apiVersion || 'v21.0';
+      const apiVersion = envConfig.meta.apiVersion || 'v26.0';
       const resultado = await settingsController._scanPagesConToken(userToken.trim(), apiVersion, appId, appSecret);
 
       if (resultado.error) {
@@ -529,7 +529,7 @@ export const settingsController = {
 
         // A. Suscribir la página a los eventos de Webhook de la aplicación
         try {
-          const apiVersion = envConfig.meta.apiVersion || 'v21.0';
+          const apiVersion = envConfig.meta.apiVersion || 'v26.0';
           const subRes = await fetch(
             `https://graph.facebook.com/${apiVersion}/${pageId}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${p.accessToken}`,
             { method: 'POST' }
@@ -791,7 +791,7 @@ export const settingsController = {
         return res.status(400).json({ error: 'El Access Token es obligatorio para detectar la cuenta de Instagram.' });
       }
       const token = accessToken.trim();
-      const apiVersion = envConfig.meta.apiVersion || 'v21.0';
+      const apiVersion = envConfig.meta.apiVersion || 'v26.0';
 
       // 1. Consultar /me directamente por si es un token de cuenta de Instagram o de Fan Page
       try {

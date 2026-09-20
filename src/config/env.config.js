@@ -111,7 +111,7 @@ export const envConfig = Object.freeze({
       .filter(Boolean),
     verifyToken: (process.env.META_VERIFY_TOKEN || 'meta_webhook_verify_token_secure_2026').trim(),
     loginConfigId: (process.env.META_LOGIN_CONFIG_ID || '').trim(),
-    apiVersion: (process.env.META_API_VERSION || 'v21.0').trim(),
+    apiVersion: (process.env.META_API_VERSION || 'v26.0').trim(),
   },
 
   // API de Conversiones: informarle a Meta las ventas que salen de una

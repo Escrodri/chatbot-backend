@@ -178,7 +178,7 @@ export const conversionsService = {
       return { ok: false, skipped: true, code: identificacion.code, error: identificacion.error };
     }
 
-    const apiVersion = config.meta.apiVersion || 'v21.0';
+    const apiVersion = config.meta.apiVersion || 'v26.0';
     const canalMeta = CANAL_META[conversation.platform];
 
     const evento = {
