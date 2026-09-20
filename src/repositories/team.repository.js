@@ -87,8 +87,10 @@ export const teamRepository = {
          COALESCE(t.status, 'active') AS status,
          COALESCE(t.is_active, true) AS is_active,
          (t.meta_app_secret_encrypted IS NOT NULL) AS has_meta_secret,
-         COUNT(DISTINCT u.id)::int AS total_users,
-         COUNT(DISTINCT c.id) FILTER (WHERE c.deleted_at IS NULL)::int AS total_channels
+         COUNT(DISTINCT u.id) FILTER (WHERE u.role != 'superadmin')::int AS total_users,
+         COUNT(DISTINCT c.id) FILTER (WHERE c.deleted_at IS NULL)::int AS total_channels,
+         (SELECT name FROM users WHERE team_id = t.id AND role = 'admin' ORDER BY id ASC LIMIT 1) AS admin_name,
+         (SELECT email FROM users WHERE team_id = t.id AND role = 'admin' ORDER BY id ASC LIMIT 1) AS admin_email
        FROM teams t
        LEFT JOIN users u ON u.team_id = t.id
        LEFT JOIN channels c ON c.team_id = t.id

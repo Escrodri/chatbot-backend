@@ -78,6 +78,9 @@ export async function initDatabase() {
       [targetAdminEmail]
     );
 
+    // El Superadministrador es global de la plataforma; su team_id debe ser NULL para no contarse erróneamente como operador del Equipo Principal
+    await client.query("UPDATE users SET team_id = NULL WHERE role = 'superadmin'");
+
     console.log('✅ [DATABASE] Esquema e índices de PostgreSQL 16 verificados.');
 
     // 4. Verificar y sembrar administrador inicial
@@ -100,7 +103,7 @@ export async function initDatabase() {
       await client.query(
         `INSERT INTO users (team_id, email, password_hash, name, role, is_active)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [defaultTeamId, adminEmail, passwordHash, 'Super Administrador del Sistema', 'superadmin', true]
+        [null, adminEmail, passwordHash, 'Super Administrador del Sistema', 'superadmin', true]
       );
 
       if (generated) {

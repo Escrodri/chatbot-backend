@@ -49,8 +49,10 @@ export const userRepository = {
     const params = [];
 
     if (teamId) {
-      sql += ` WHERE u.team_id = $1`;
+      sql += ` WHERE u.team_id = $1 AND u.role != 'superadmin'`;
       params.push(teamId);
+    } else {
+      sql += ` WHERE u.role != 'superadmin'`;
     }
 
     sql += ` GROUP BY u.id ORDER BY u.id ASC`;
