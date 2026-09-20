@@ -71,6 +71,63 @@ export const teamsController = {
     } catch (error) {
       return res.status(500).json({ error: 'Error al crear el equipo: ' + error.message });
     }
+  },
+
+  /**
+   * Actualiza el nombre y/o credenciales de Meta de un equipo.
+   * PUT /api/teams/:id
+   */
+  async updateTeam(req, res) {
+    try {
+      const teamId = parseInt(req.params.id, 10);
+      if (!teamId) return res.status(400).json({ error: 'ID de equipo inválido.' });
+
+      const { name, metaAppId, metaAppSecret } = req.body || {};
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ error: 'El nombre del equipo es obligatorio.' });
+      }
+
+      const updated = await teamRepository.updateTeam(teamId, {
+        name: String(name).trim(),
+        metaAppId,
+        metaAppSecret
+      });
+
+      return res.json({
+        success: true,
+        message: 'Equipo actualizado correctamente.',
+        team: updated
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al actualizar el equipo: ' + error.message });
+    }
+  },
+
+  /**
+   * Desactiva o reactiva un equipo (soft toggle, nunca borra filas).
+   * PATCH /api/teams/:id/status
+   */
+  async toggleTeamStatus(req, res) {
+    try {
+      const teamId = parseInt(req.params.id, 10);
+      if (!teamId) return res.status(400).json({ error: 'ID de equipo inválido.' });
+
+      if (teamId === 1) {
+        return res.status(400).json({ error: 'El Equipo Principal no puede ser desactivado.' });
+      }
+
+      const updated = await teamRepository.toggleStatus(teamId);
+      if (!updated) return res.status(404).json({ error: 'Equipo no encontrado.' });
+
+      const accion = updated.status === 'active' ? 'reactivado' : 'desactivado';
+      return res.json({
+        success: true,
+        message: `Equipo "${updated.name}" ${accion} exitosamente.`,
+        team: updated
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al cambiar estado del equipo: ' + error.message });
+    }
   }
 };
 

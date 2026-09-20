@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS teams (
     meta_app_secret_encrypted TEXT,
     token_iv VARCHAR(64),
     token_tag VARCHAR(64),
+    status VARCHAR(20) DEFAULT 'active' CHECK(status IN ('active', 'inactive')),
+    is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );

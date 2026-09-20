@@ -10,5 +10,7 @@ teamsRouter.use(requireSuperAdmin);
 
 teamsRouter.get('/', teamsController.getTeams);
 teamsRouter.post('/', teamsController.createTeam);
+teamsRouter.put('/:id', teamsController.updateTeam);
+teamsRouter.patch('/:id/status', teamsController.toggleTeamStatus);
 
 export default teamsRouter;

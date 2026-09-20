@@ -79,6 +79,8 @@ export const teamRepository = {
     const { rows } = await query(
       `SELECT
          t.id, t.name, t.meta_app_id, t.created_at,
+         COALESCE(t.status, 'active') AS status,
+         COALESCE(t.is_active, true) AS is_active,
          (t.meta_app_secret_encrypted IS NOT NULL) AS has_meta_secret,
          COUNT(DISTINCT u.id)::int AS total_users,
          COUNT(DISTINCT c.id) FILTER (WHERE c.deleted_at IS NULL)::int AS total_channels
@@ -89,6 +91,68 @@ export const teamRepository = {
        ORDER BY t.id ASC`
     );
     return rows;
+  },
+
+  /**
+   * Actualiza el nombre y/o credenciales de Meta de un equipo.
+   */
+  async updateTeam(teamId, { name, metaAppId, metaAppSecret }) {
+    const fields = [];
+    const values = [];
+    let idx = 1;
+
+    if (name !== undefined && String(name).trim()) {
+      fields.push(`name = $${idx++}`);
+      values.push(String(name).trim());
+    }
+    if (metaAppId !== undefined) {
+      fields.push(`meta_app_id = $${idx++}`);
+      values.push((metaAppId && String(metaAppId).trim()) ? String(metaAppId).trim() : null);
+    }
+    if (metaAppSecret !== undefined) {
+      if (metaAppSecret && String(metaAppSecret).trim()) {
+        const encrypted = encryptSecret(String(metaAppSecret).trim());
+        fields.push(`meta_app_secret_encrypted = $${idx++}`);
+        values.push(encrypted.cipherText);
+        fields.push(`token_iv = $${idx++}`);
+        values.push(encrypted.iv);
+        fields.push(`token_tag = $${idx++}`);
+        values.push(encrypted.tag);
+      }
+    }
+
+    if (fields.length > 0) {
+      fields.push(`updated_at = CURRENT_TIMESTAMP`);
+      values.push(teamId);
+      await query(
+        `UPDATE teams SET ${fields.join(', ')} WHERE id = $${idx}`,
+        values
+      );
+    }
+
+    return this.findById(teamId);
+  },
+
+  /**
+   * Alterna el estado de un equipo (active <-> inactive) sin borrar nada de la base de datos.
+   */
+  async toggleStatus(teamId) {
+    const team = await this.findById(teamId);
+    if (!team) return null;
+
+    const currentStatus = team.status || (team.is_active === false ? 'inactive' : 'active');
+    const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
+    const newIsActive = (newStatus === 'active');
+
+    const { rows } = await query(
+      `UPDATE teams 
+       SET status = $1, is_active = $2, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $3 
+       RETURNING id, name, status, is_active`,
+      [newStatus, newIsActive, teamId]
+    );
+
+    return rows[0];
   },
 
   /**
