@@ -128,6 +128,9 @@ export const teamsController = {
 
       const user = await userRepository.findById(userId);
       if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
+      if (user.team_id !== teamId) {
+        return res.status(400).json({ error: 'El usuario no pertenece a este equipo.' });
+      }
 
       const { name, email, role, isActive, password, channelIds } = req.body || {};
 
@@ -180,11 +183,16 @@ export const teamsController = {
    */
   async toggleTeamUserStatus(req, res) {
     try {
+      const teamId = parseInt(req.params.id, 10);
       const userId = parseInt(req.params.userId, 10);
-      if (!userId) return res.status(400).json({ error: 'ID de usuario inválido.' });
+      if (!teamId || !userId) return res.status(400).json({ error: 'IDs inválidos.' });
 
       const user = await userRepository.findById(userId);
       if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
+
+      if (user.team_id !== teamId) {
+        return res.status(400).json({ error: 'El usuario no pertenece a este equipo.' });
+      }
 
       if (user.role === 'superadmin') {
         return res.status(400).json({ error: 'El Superadministrador no puede ser desactivado.' });

@@ -87,10 +87,11 @@ export const channelRepository = {
    */
   async getAllAppSecrets() {
     try {
+      const secrets = [];
+      // 1. Secretos a nivel de canal
       const { rows } = await query(
         `SELECT app_secret_encrypted FROM channels WHERE app_secret_encrypted IS NOT NULL AND deleted_at IS NULL`
       );
-      const secrets = [];
       for (const row of rows) {
         try {
           if (!row.app_secret_encrypted) continue;
@@ -100,9 +101,26 @@ export const channelRepository = {
             secrets.push(decrypted.trim());
           }
         } catch {
-          // Omitir si falla el descifrado de algún registro
+          // Omitir si falla el descifrado
         }
       }
+
+      // 2. Secretos a nivel de equipo
+      const { rows: teamRows } = await query(
+        `SELECT meta_app_secret_encrypted, token_iv, token_tag FROM teams WHERE meta_app_secret_encrypted IS NOT NULL AND is_active = true`
+      );
+      for (const tRow of teamRows) {
+        try {
+          if (!tRow.meta_app_secret_encrypted || !tRow.token_iv || !tRow.token_tag) continue;
+          const decrypted = decryptSecret(tRow.meta_app_secret_encrypted, tRow.token_iv, tRow.token_tag);
+          if (decrypted && typeof decrypted === 'string' && decrypted.trim()) {
+            secrets.push(decrypted.trim());
+          }
+        } catch {
+          // Omitir si falla el descifrado
+        }
+      }
+
       return secrets;
     } catch {
       return [];

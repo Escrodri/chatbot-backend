@@ -138,10 +138,14 @@ export const userRepository = {
       await client.query('DELETE FROM user_channel_assignments WHERE user_id = $1', [userId]);
 
       if (limpios.length > 0) {
-        // Solo se asignan canales que existan de verdad.
+        // Solo se asignan canales que existan de verdad, no estén eliminados y pertenezcan al mismo equipo del usuario.
         await client.query(
           `INSERT INTO user_channel_assignments (user_id, channel_id)
-           SELECT $1, c.id FROM channels c WHERE c.id = ANY($2::int[])
+           SELECT $1, c.id 
+           FROM channels c 
+           WHERE c.id = ANY($2::int[])
+             AND c.deleted_at IS NULL
+             AND (c.team_id = (SELECT team_id FROM users WHERE id = $1) OR (SELECT role FROM users WHERE id = $1) = 'superadmin')
            ON CONFLICT (user_id, channel_id) DO NOTHING`,
           [userId, limpios]
         );

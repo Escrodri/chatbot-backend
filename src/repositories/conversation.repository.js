@@ -12,25 +12,16 @@ export const conversationRepository = {
    * @returns {Promise<object>}
    */
   async findOrCreateByContact(channelId, contactId) {
-    // Buscar si ya existe
-    const { rows: existing } = await query(
-      `SELECT * FROM conversations WHERE channel_id = $1 AND contact_id = $2`,
-      [channelId, contactId]
-    );
-
-    if (existing.length > 0) {
-      return existing[0];
-    }
-
-    // Crear nueva conversación con bot activo por defecto
-    const { rows: created } = await query(
+    const { rows } = await query(
       `INSERT INTO conversations (channel_id, contact_id, bot_status, unread_count)
        VALUES ($1, $2, 'active', 0)
+       ON CONFLICT (channel_id, contact_id) DO UPDATE
+         SET last_customer_interaction = CURRENT_TIMESTAMP
        RETURNING *`,
       [channelId, contactId]
     );
 
-    return created[0];
+    return rows[0];
   },
 
   /**
@@ -152,13 +143,19 @@ export const conversationRepository = {
   /**
    * Lista conversaciones para la bandeja lateral estilo WhatsApp Web con filtros avanzados.
    * 
-   * @param {{ platform?: string, channelId?: number, search?: string, assignedChannelIds?: number[], limit?: number, offset?: number }} filters
+   * @param {{ teamId?: number|null, platform?: string, channelId?: number, search?: string, assignedChannelIds?: number[], limit?: number, offset?: number }} filters
    * @returns {Promise<Array>}
    */
-  async listWithFilters({ platform = null, channelId = null, search = null, assignedChannelIds = null, limit = 50, offset = 0 } = {}) {
-    const conditions = [];
+  async listWithFilters({ teamId = null, platform = null, channelId = null, search = null, assignedChannelIds = null, limit = 50, offset = 0 } = {}) {
+    const conditions = ['ch.deleted_at IS NULL'];
     const params = [];
     let pIdx = 1;
+
+    // Aislamiento Multi-Tenant: restringir estrictamente por equipo
+    if (teamId) {
+      conditions.push(`ch.team_id = $${pIdx++}`);
+      params.push(teamId);
+    }
 
     // Aislamiento IDOR: si el operador tiene canales restringidos
     if (assignedChannelIds && Array.isArray(assignedChannelIds)) {

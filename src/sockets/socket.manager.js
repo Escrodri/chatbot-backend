@@ -2,20 +2,37 @@ import { Server as SocketIOServer } from 'socket.io';
 import { verifyToken } from '../utils/jwt.util.js';
 import { userRepository } from '../repositories/user.repository.js';
 import { config } from '../config/index.js';
+import { pool } from '../database/pool.js';
 
 /**
  * Gestor de WebSockets en Tiempo Real (Socket.io)
  *
- * SEGURIDAD (C-01):
+ * SEGURIDAD & MULTI-TENANCY (C-01):
  * 1. Ninguna conexión se acepta sin un JWT válido, el mismo que usa la API HTTP.
- *    El token puede llegar por la cookie `session_token` o por `auth.token` en el handshake.
- * 2. Las salas no las elige el cliente. Al conectarse, el servidor decide a qué salas
- *    entra según el rol y los canales asignados al usuario. Un operador nunca recibe
- *    eventos de un canal que no le corresponde.
+ * 2. Aislamiento estricto de salas:
+ *    - Los administradores de una empresa entran a su sala de equipo `team_${teamId}_admins`.
+ *    - Los operadores entran a las salas de los canales que tienen asignados `channel_${channelId}`.
+ *    - NUNCA se transmiten mensajes de una empresa a los administradores de otra empresa.
  */
 
-const ROOM_ADMINS = 'admins';
+const roomForTeamAdmins = (teamId) => teamId ? `team_${teamId}_admins` : 'team_global_admins';
 const roomForChannel = (channelId) => `channel_${channelId}`;
+
+const channelTeamCache = new Map();
+
+async function resolveTeamIdForChannel(channelId) {
+  if (!channelId) return null;
+  const cId = Number(channelId);
+  if (channelTeamCache.has(cId)) return channelTeamCache.get(cId);
+  try {
+    const { rows } = await pool.query('SELECT team_id FROM channels WHERE id = $1', [cId]);
+    if (rows.length > 0 && rows[0].team_id) {
+      channelTeamCache.set(cId, rows[0].team_id);
+      return rows[0].team_id;
+    }
+  } catch {}
+  return null;
+}
 
 /** Extrae el valor de una cookie concreta de la cabecera Cookie. */
 function readCookie(cookieHeader, name) {
@@ -85,6 +102,7 @@ class SocketManager {
 
       socket.data.user = {
         id: payload.id,
+        team_id: payload.team_id || null,
         email: payload.email,
         name: payload.name,
         role: payload.role
@@ -93,7 +111,7 @@ class SocketManager {
       // Los canales visibles se resuelven en el servidor, no los pide el cliente.
       try {
         socket.data.channelIds = payload.role === 'admin'
-          ? null // null = todos los canales
+          ? null // null = todos los canales de su equipo
           : await userRepository.getAssignedChannelIds(payload.id);
       } catch (err) {
         console.error('❌ [SOCKET] No se pudieron resolver los canales asignados:', err.message);
@@ -108,7 +126,9 @@ class SocketManager {
       const { user, channelIds } = socket.data;
 
       if (user.role === 'admin') {
-        socket.join(ROOM_ADMINS);
+        if (user.team_id) {
+          socket.join(roomForTeamAdmins(user.team_id));
+        }
       } else {
         for (const channelId of channelIds || []) {
           socket.join(roomForChannel(channelId));
@@ -117,11 +137,9 @@ class SocketManager {
 
       console.log(
         `⚡ [SOCKET] ${user.email} (${user.role}) conectado. ` +
-        `Canales: ${user.role === 'admin' ? 'todos' : (channelIds || []).join(', ') || 'ninguno'}`
+        `Equipo: #${user.team_id || 'global'} | Canales: ${user.role === 'admin' ? 'todos del equipo' : (channelIds || []).join(', ') || 'ninguno'}`
       );
 
-      // Compatibilidad: el cliente puede seguir emitiendo estos eventos, pero ya no
-      // otorgan acceso a nada. Las salas se asignaron arriba.
       socket.on('join_inbox', () => {});
       socket.on('join_channel', (channelId) => {
         const permitido = user.role === 'admin' || (channelIds || []).includes(Number(channelId));
@@ -138,29 +156,33 @@ class SocketManager {
       });
     });
 
-    console.log('⚡ [SOCKET.IO] Servidor de WebSockets inicializado con autenticación JWT.');
+    console.log('⚡ [SOCKET.IO] Servidor de WebSockets inicializado con autenticación JWT y aislamiento multi-tenant.');
     return this.io;
   }
 
   /**
-   * Destinatarios de un evento: los operadores del canal, más los administradores.
+   * Destinatarios de un evento: los operadores del canal, más los administradores de su equipo.
    * @private
    */
-  _audience(channelId) {
+  _audience(channelId, teamId = null) {
     if (!this.io) return null;
-    const target = this.io.to(ROOM_ADMINS);
-    return channelId ? target.to(roomForChannel(channelId)) : target;
+    let target = this.io;
+    if (channelId) {
+      target = target.to(roomForChannel(channelId));
+    }
+    const effectiveTeamId = teamId || (channelId ? channelTeamCache.get(Number(channelId)) : null);
+    if (effectiveTeamId) {
+      target = target.to(roomForTeamAdmins(effectiveTeamId));
+    }
+    return target;
   }
 
   /**
-   * Emite un mensaje entrante o saliente a los operadores del canal.
-   *
-   * @param {number} channelId
-   * @param {object} messageData
-   * @param {object} conversationData Cabecera actualizada para subir el chat al tope
+   * Emite un mensaje entrante o saliente a los operadores del canal y admins del equipo.
    */
-  emitNewMessage(channelId, messageData, conversationData = null) {
-    const audience = this._audience(channelId);
+  async emitNewMessage(channelId, messageData, conversationData = null) {
+    const effectiveTeamId = await resolveTeamIdForChannel(channelId);
+    const audience = this._audience(channelId, effectiveTeamId);
     if (!audience) return;
 
     audience.emit('new_message', {
@@ -178,84 +200,70 @@ class SocketManager {
 
   /**
    * Emite el cambio de estado de entrega de un mensaje.
-   *
-   * @param {number} channelId
-   * @param {string} metaMessageId
-   * @param {'delivered'|'read'|'failed'} status
    */
-  emitMessageStatus(channelId, metaMessageId, status) {
-    const audience = this._audience(channelId);
+  async emitMessageStatus(channelId, metaMessageId, status) {
+    const effectiveTeamId = await resolveTeamIdForChannel(channelId);
+    const audience = this._audience(channelId, effectiveTeamId);
     if (!audience) return;
     audience.emit('message_status_updated', { channelId, metaMessageId, status });
   }
 
   /**
    * Emite el cambio de estado del bot (Handover).
-   *
-   * @param {number} channelId
-   * @param {number} conversationId
-   * @param {'active'|'handed_over'|'disabled'} botStatus
    */
-  emitBotStatus(channelId, conversationId, botStatus) {
-    const audience = this._audience(channelId);
+  async emitBotStatus(channelId, conversationId, botStatus) {
+    const effectiveTeamId = await resolveTeamIdForChannel(channelId);
+    const audience = this._audience(channelId, effectiveTeamId);
     if (!audience) return;
     audience.emit('bot_status_changed', { channelId, conversationId, botStatus });
   }
 
   /**
    * Emite un mensaje recién enviado por un operador.
-   * @param {number} channelId
-   * @param {object} messageData
    */
-  emitMessageSent(channelId, messageData) {
-    const audience = this._audience(channelId);
+  async emitMessageSent(channelId, messageData) {
+    const effectiveTeamId = await resolveTeamIdForChannel(channelId);
+    const audience = this._audience(channelId, effectiveTeamId);
     if (!audience) return;
     audience.emit('message:sent', messageData);
   }
 
   /**
    * Emite que una imagen de una sola vista fue abierta/visualizada.
-   * @param {number} channelId
-   * @param {{ conversationId: number, messageId: number, viewed_at: Date|string }} data
    */
-  emitMessageViewed(channelId, data) {
-    const audience = this._audience(channelId);
+  async emitMessageViewed(channelId, data) {
+    const effectiveTeamId = await resolveTeamIdForChannel(channelId);
+    const audience = this._audience(channelId, effectiveTeamId);
     if (!audience) return;
     audience.emit('message_viewed', data);
   }
 
   /**
    * Emite la actualización de la cabecera de una conversación.
-   * @param {number} channelId
-   * @param {object} conversationData
    */
-  emitConversationUpdated(channelId, conversationData) {
-    const audience = this._audience(channelId);
+  async emitConversationUpdated(channelId, conversationData) {
+    const effectiveTeamId = await resolveTeamIdForChannel(channelId);
+    const audience = this._audience(channelId, effectiveTeamId);
     if (!audience) return;
     audience.emit('conversation:updated', conversationData);
   }
 
   /**
    * Emite que los mensajes de una conversación fueron leídos por un operador.
-   * @param {number} channelId
-   * @param {object} data
    */
-  emitMessageStatusUpdated(channelId, data) {
-    const audience = this._audience(channelId);
+  async emitMessageStatusUpdated(channelId, data) {
+    const effectiveTeamId = await resolveTeamIdForChannel(channelId);
+    const audience = this._audience(channelId, effectiveTeamId);
     if (!audience) return;
     audience.emit('message:status_updated', data);
   }
 
   /**
-   * Avisa de un cambio de estado de un canal (por ejemplo, token revocado por Meta).
-   * Solo lo reciben los administradores y los operadores de ese canal.
-   *
-   * @param {number} channelId
-   * @param {'active'|'error'|'paused'} status
-   * @param {string|null} errorMessage
+   * Avisa de un cambio de estado de un canal.
    */
-  emitChannelStatus(channelId, status, errorMessage = null) {
-    const audience = this._audience(channelId);
+  async emitChannelStatus(channelId, status, errorMessage = null) {
+    const effectiveTeamId = await resolveTeamIdForChannel(channelId);
+    const audience = this._audience(channelId, effectiveTeamId);
     if (!audience) return;
     audience.emit('channel_status_changed', { channelId, status, errorMessage });
   }

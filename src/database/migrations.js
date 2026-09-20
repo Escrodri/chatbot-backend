@@ -26,8 +26,86 @@ export async function initDatabase() {
     await client.query('ALTER TABLE channels ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL');
     await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE');
     await client.query('ALTER TABLE channels ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE');
+    await client.query('ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE');
     await client.query("ALTER TABLE teams ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'");
     await client.query('ALTER TABLE teams ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE');
+
+    // Índices de rendimiento multi-tenant
+    await client.query('CREATE INDEX IF NOT EXISTS idx_channels_team ON channels(team_id, deleted_at)');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_users_team ON users(team_id, role)');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_bot_settings_team ON bot_settings(team_id, channel_id)');
+
+    // Deduplicar conversaciones (channel_id, contact_id) si existieran antes de aplicar la restricción UNIQUE
+    try {
+      await client.query(`
+        DO $$
+        DECLARE
+          dup RECORD;
+          primary_id INT;
+        BEGIN
+          FOR dup IN (
+            SELECT channel_id, contact_id, ARRAY_AGG(id ORDER BY last_message_time DESC, id DESC) as ids
+            FROM conversations
+            GROUP BY channel_id, contact_id
+            HAVING COUNT(*) > 1
+          ) LOOP
+            primary_id := dup.ids[1];
+            UPDATE messages SET conversation_id = primary_id WHERE conversation_id = ANY(dup.ids[2:]);
+            DELETE FROM conversations WHERE id = ANY(dup.ids[2:]);
+          END LOOP;
+        END $$;
+      `);
+      await client.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'conversations_channel_id_contact_id_key'
+          ) THEN
+            ALTER TABLE conversations ADD CONSTRAINT conversations_channel_id_contact_id_key UNIQUE(channel_id, contact_id);
+          END IF;
+        EXCEPTION WHEN OTHERS THEN
+          NULL;
+        END $$;
+      `);
+      await client.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_channel_contact ON conversations(channel_id, contact_id)');
+    } catch (cErr) {
+      console.warn('⚠️ [DATABASE] Nota sobre restricción de conversaciones:', cErr.message);
+    }
+
+    // Deduplicar y asegurar unicidad en bot_settings
+    try {
+      await client.query(`
+        DO $$
+        DECLARE
+          bdup RECORD;
+        BEGIN
+          FOR bdup IN (
+            SELECT channel_id, ARRAY_AGG(id ORDER BY updated_at DESC, id DESC) as ids
+            FROM bot_settings
+            WHERE channel_id IS NOT NULL
+            GROUP BY channel_id
+            HAVING COUNT(*) > 1
+          ) LOOP
+            DELETE FROM bot_settings WHERE id = ANY(bdup.ids[2:]);
+          END LOOP;
+
+          FOR bdup IN (
+            SELECT team_id, ARRAY_AGG(id ORDER BY updated_at DESC, id DESC) as ids
+            FROM bot_settings
+            WHERE channel_id IS NULL AND team_id IS NOT NULL
+            GROUP BY team_id
+            HAVING COUNT(*) > 1
+          ) LOOP
+            DELETE FROM bot_settings WHERE id = ANY(bdup.ids[2:]);
+          END LOOP;
+        END $$;
+      `);
+      await client.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_settings_channel_unique ON bot_settings(channel_id) WHERE channel_id IS NOT NULL');
+      await client.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_settings_team_default_unique ON bot_settings(team_id) WHERE channel_id IS NULL');
+    } catch (bErr) {
+      console.warn('⚠️ [DATABASE] Nota sobre índices únicos de bot_settings:', bErr.message);
+    }
+
     // Actualizar restricción de roles dinámicamente para soportar 'superadmin'
     try {
       await client.query(`
@@ -64,9 +142,15 @@ export async function initDatabase() {
       console.log(`🌱 [DATABASE] Equipo principal por defecto creado (#${defaultTeamId}).`);
     }
 
-    // 3. Vincular usuarios y canales huérfanos al equipo por defecto
+    // 3. Vincular usuarios, canales y configuración de bot huérfanos al equipo por defecto
     await client.query('UPDATE users SET team_id = $1 WHERE team_id IS NULL', [defaultTeamId]);
     await client.query('UPDATE channels SET team_id = $1 WHERE team_id IS NULL', [defaultTeamId]);
+    await client.query(`
+      UPDATE bot_settings 
+      SET team_id = (SELECT team_id FROM channels WHERE id = bot_settings.channel_id) 
+      WHERE team_id IS NULL AND channel_id IS NOT NULL
+    `);
+    await client.query('UPDATE bot_settings SET team_id = $1 WHERE team_id IS NULL', [defaultTeamId]);
 
     // Promover explícitamente el usuario administrador principal a superadmin
     const targetAdminEmail = (process.env.ADMIN_EMAIL || 'admin@empresa.com').toLowerCase().trim();

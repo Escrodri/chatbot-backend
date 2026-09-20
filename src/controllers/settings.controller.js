@@ -29,7 +29,11 @@ export const settingsController = {
    */
   async createChannel(req, res) {
     try {
-      const teamId = req.body.teamId || req.user?.team_id || 1;
+      let teamId = req.body.teamId || req.user?.team_id;
+      if (!teamId) {
+        const teams = await teamRepository.listAllWithMetrics();
+        teamId = teams.length > 0 ? teams[0].id : 1;
+      }
       const { platform, name, channelIdentifier, appId, appSecret, accessToken, colorTag } = req.body;
 
       if (!platform || !['whatsapp', 'facebook', 'instagram'].includes(platform)) {
@@ -40,58 +44,46 @@ export const settingsController = {
         return res.status(400).json({ error: 'El nombre del canal es obligatorio' });
       }
 
-      if (!channelIdentifier || !channelIdentifier.trim()) {
+      if (!channelIdentifier || !String(channelIdentifier).trim()) {
         return res.status(400).json({ error: 'El identificador del canal (phone_number_id o page_id) es obligatorio' });
       }
 
-      const cleanIdentifier = String(channelIdentifier).trim().replace(/\s+/g, '');
+      let cleanIdentifier = String(channelIdentifier).trim().replace(/\s+/g, '');
+      if (platform === 'whatsapp') {
+        cleanIdentifier = cleanIdentifier.replace(/[^\d]/g, '');
+        if (cleanIdentifier.length < 10) {
+          return res.status(400).json({
+            error: 'El Phone Number ID de WhatsApp debe ser un ID numérico generado por Meta (ej: 105948305938492), no tu número telefónico personal.'
+          });
+        }
+      }
 
       if (!accessToken || !accessToken.trim()) {
         return res.status(400).json({ error: 'El token de acceso de Meta Graph API es obligatorio' });
       }
 
-      // Verificar si el identificador ya existe (activo o archivado)
-      const existingAny = await channelRepository.findAnyByIdentifier(cleanIdentifier);
-      if (existingAny) {
-        if (!existingAny.deleted_at) {
-          // Si ya existe activo, actualizar credenciales (App ID, App Secret, Token, Team) de forma transparente
-          const updated = await channelRepository.update(existingAny.id, {
-            teamId: existingAny.team_id || teamId,
-            name: name.trim(),
-            channelIdentifier: cleanIdentifier,
-            accessToken: accessToken.trim(),
-            appId: appId ? appId.trim() : null,
-            appSecret: appSecret ? appSecret.trim() : null,
-            colorTag: colorTag || existingAny.color_tag
-          });
-
-          // Intentar suscribir webhook a la página o cuenta
-          if (platform === 'facebook' || platform === 'instagram') {
-            try {
-              const apiVersion = envConfig.meta.apiVersion || 'v26.0';
-              await fetch(
-                `https://graph.facebook.com/${apiVersion}/${cleanIdentifier}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${accessToken.trim()}`,
-                { method: 'POST' }
-              );
-            } catch {}
+      // Verificación en vivo con Meta Graph API para dar feedback inmediato al usuario
+      const apiVersion = envConfig.meta.apiVersion || 'v26.0';
+      if (platform === 'whatsapp') {
+        try {
+          const testRes = await fetch(
+            `https://graph.facebook.com/${apiVersion}/${cleanIdentifier}?fields=verified_name,code_verification_status,display_phone_number&access_token=${accessToken.trim()}`
+          );
+          const testData = await testRes.json();
+          if (!testRes.ok || testData.error) {
+            const detail = testData.error?.message || `HTTP ${testRes.status}`;
+            console.warn('⚠️ [CHANNEL CREATE] Meta rechazó verificación WhatsApp:', detail);
+            return res.status(400).json({
+              error: `Meta Graph API rechazó el identificador o token: ${detail}. Verifica que el Phone Number ID sea correcto y que el token tenga el permiso 'whatsapp_business_messaging'.`
+            });
           }
-
-          return res.status(200).json(updated);
+        } catch (metaErr) {
+          console.warn('⚠️ [CHANNEL CREATE] Conexión de prueba con Meta omitida por red:', metaErr.message);
         }
-
-        // Si estaba archivado/eliminado previamente, restaurarlo y reconectar todo su historial intacto
-        const restored = await channelRepository.restoreAndReactivate(existingAny.id, {
-          teamId: existingAny.team_id || teamId,
-          name: name.trim(),
-          accessToken: accessToken.trim(),
-          appId: appId ? appId.trim() : null,
-          appSecret: appSecret ? appSecret.trim() : null,
-          colorTag: colorTag || '#D4AF37'
-        });
-        return res.status(200).json(restored);
       }
 
-      const newChannel = await channelRepository.create({
+      // Upsert atómico del canal: si ya existía (activo o archivado), actualiza credenciales y reactiva
+      const channel = await channelRepository.upsert({
         teamId,
         platform,
         name: name.trim(),
@@ -99,13 +91,13 @@ export const settingsController = {
         appId: appId ? appId.trim() : null,
         appSecret: appSecret ? appSecret.trim() : null,
         accessToken: accessToken.trim(),
-        colorTag: colorTag || '#D4AF37'
+        colorTag: colorTag || (platform === 'whatsapp' ? '#25D366' : '#1877F2'),
+        status: 'active'
       });
 
-      // Intentar suscribir webhook a la página o cuenta en Meta
+      // Si es Facebook o Instagram, intentar suscripción
       if (platform === 'facebook' || platform === 'instagram') {
         try {
-          const apiVersion = envConfig.meta.apiVersion || 'v26.0';
           await fetch(
             `https://graph.facebook.com/${apiVersion}/${cleanIdentifier}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${accessToken.trim()}`,
             { method: 'POST' }
@@ -113,7 +105,7 @@ export const settingsController = {
         } catch {}
       }
 
-      return res.status(201).json(newChannel);
+      return res.status(201).json(channel);
     } catch (error) {
       return res.status(500).json({ error: 'Error al registrar el canal: ' + error.message });
     }
@@ -132,6 +124,10 @@ export const settingsController = {
       const channel = await channelRepository.findById(id);
       if (!channel) {
         return res.status(404).json({ error: 'Canal no encontrado' });
+      }
+
+      if (req.user.role !== 'superadmin' && req.user.team_id && channel.team_id !== req.user.team_id) {
+        return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
       }
 
       const updated = await channelRepository.update(id, req.body);
@@ -156,6 +152,10 @@ export const settingsController = {
         return res.status(404).json({ error: 'Canal no encontrado' });
       }
 
+      if (req.user.role !== 'superadmin' && req.user.team_id && channel.team_id !== req.user.team_id) {
+        return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+      }
+
       await channelRepository.deleteById(id);
       return res.json({ success: true, message: 'Canal eliminado correctamente' });
     } catch (error) {
@@ -177,6 +177,10 @@ export const settingsController = {
       const channel = await channelRepository.findById(id);
       if (!channel) {
         return res.status(404).json({ error: 'Canal no encontrado' });
+      }
+
+      if (req.user.role !== 'superadmin' && req.user.team_id && channel.team_id !== req.user.team_id) {
+        return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
       }
 
       const apiVersion = envConfig.meta.apiVersion || 'v26.0';
@@ -703,7 +707,8 @@ export const settingsController = {
   async getBotSettings(req, res) {
     try {
       const channelId = req.query.channel_id ? parseInt(req.query.channel_id, 10) : null;
-      const settings = await botRepository.getSettingsForChannel(channelId);
+      const teamId = req.user?.team_id || null;
+      const settings = await botRepository.getSettingsForChannel(teamId, channelId);
       return res.json(settings);
     } catch (error) {
       return res.status(500).json({ error: 'Error al obtener la configuración del bot: ' + error.message });
@@ -716,12 +721,21 @@ export const settingsController = {
   async saveBotSettings(req, res) {
     try {
       const { channelId, isEnabled, welcomeMessage, inactivityHours } = req.body;
+      const teamId = req.user?.team_id || null;
 
       if (!welcomeMessage || !welcomeMessage.trim()) {
         return res.status(400).json({ error: 'El mensaje de bienvenida es obligatorio' });
       }
 
+      if (channelId && req.user.role !== 'superadmin') {
+        const ch = await channelRepository.findById(parseInt(channelId, 10));
+        if (ch && req.user.team_id && ch.team_id !== req.user.team_id) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
+      }
+
       const saved = await botRepository.saveSettings({
+        teamId,
         channelId: channelId ? parseInt(channelId, 10) : null,
         isEnabled: isEnabled !== undefined ? Boolean(isEnabled) : true,
         welcomeMessage: welcomeMessage.trim(),
@@ -820,6 +834,10 @@ export const settingsController = {
         return res.status(404).json({ error: 'Usuario no encontrado' });
       }
 
+      if (req.user.role !== 'superadmin' && req.user.team_id && usuario.team_id !== req.user.team_id) {
+        return res.status(403).json({ error: 'Acceso no autorizado a este usuario' });
+      }
+
       const channelIds = await userRepository.getAssignedChannelIds(id);
 
       return res.json({
@@ -855,6 +873,10 @@ export const settingsController = {
         return res.status(404).json({ error: 'Usuario no encontrado' });
       }
 
+      if (req.user.role !== 'superadmin' && req.user.team_id && usuario.team_id !== req.user.team_id) {
+        return res.status(403).json({ error: 'Acceso no autorizado a este usuario' });
+      }
+
       const asignados = await userRepository.setAssignedChannels(id, channelIds);
 
       return res.json({
@@ -880,7 +902,8 @@ export const settingsController = {
   async getLogs(req, res) {
     try {
       const limit = req.query.limit ? Math.min(parseInt(req.query.limit, 10), 200) : 50;
-      const logs = await logRepository.listRecent(limit);
+      const teamId = req.user.role === 'superadmin' ? null : (req.user.team_id || null);
+      const logs = await logRepository.listRecent(limit, teamId);
       return res.json(logs);
     } catch (error) {
       return res.status(500).json({ error: 'Error al consultar logs de auditoría: ' + error.message });

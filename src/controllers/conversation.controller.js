@@ -10,6 +10,31 @@ import { mediaService } from '../services/media.service.js';
 import { conversionsService } from '../services/conversions.service.js';
 import { conversionRepository } from '../repositories/conversion.repository.js';
 
+/**
+ * Helper de control de acceso estricto IDOR y aislamiento Multi-Tenant:
+ * Valida que la conversación pertenezca al equipo del usuario y que, si es operador, tenga el canal asignado.
+ */
+async function canUserAccessConversation(user, conv) {
+  if (!user || !conv) return false;
+  if (user.role === 'superadmin') return true;
+
+  if (user.team_id) {
+    const fullChannel = await channelRepository.findById(conv.channel_id);
+    if (!fullChannel || fullChannel.team_id !== user.team_id) {
+      return false;
+    }
+  }
+
+  if (user.role === 'agent') {
+    const assigned = await userRepository.getAssignedChannelIds(user.id);
+    if (!assigned.includes(conv.channel_id)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export const conversationController = {
   /**
    * Lista conversaciones con filtros, búsqueda y aislamiento IDOR.
@@ -24,7 +49,10 @@ export const conversationController = {
         assignedChannelIds = await userRepository.getAssignedChannelIds(req.user.id);
       }
 
+      const teamId = req.user.role === 'superadmin' ? null : (req.user.team_id || null);
+
       const conversations = await conversationRepository.listWithFilters({
+        teamId,
         platform: platform || null,
         channelId: channel_id ? parseInt(channel_id, 10) : null,
         search: search || null,
@@ -125,12 +153,9 @@ export const conversationController = {
         }
       }
 
-      // Verificación IDOR
-      if (req.user.role === 'agent') {
-        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
-          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
-        }
+      // Verificación IDOR y Aislamiento Multi-Tenant
+      if (!(await canUserAccessConversation(req.user, conv))) {
+        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
       }
 
       conv.window_status = timeUtil.checkMessagingWindow(conv.last_customer_interaction, conv.platform);
@@ -155,12 +180,9 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      // Verificación IDOR
-      if (req.user.role === 'agent') {
-        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
-          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
-        }
+      // Verificación IDOR y Aislamiento Multi-Tenant
+      if (!(await canUserAccessConversation(req.user, conv))) {
+        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
       }
 
       const beforeId = req.query.before_id ? parseInt(req.query.before_id, 10) : null;
@@ -211,12 +233,9 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      // Verificación IDOR
-      if (req.user.role === 'agent') {
-        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
-          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
-        }
+      // Verificación IDOR y Aislamiento Multi-Tenant
+      if (!(await canUserAccessConversation(req.user, conv))) {
+        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
       }
 
       // 0. Si se adjuntó un archivo, procesarlo y guardarlo
@@ -366,12 +385,9 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      // Verificación IDOR: un operador solo actúa sobre sus canales.
-      if (req.user.role === 'agent') {
-        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
-          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
-        }
+      // Verificación IDOR y Aislamiento Multi-Tenant
+      if (!(await canUserAccessConversation(req.user, conv))) {
+        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
       }
 
       const mensaje = await messageRepository.findByIdWithChannel(messageId);
@@ -468,11 +484,8 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      if (req.user.role === 'agent') {
-        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
-          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
-        }
+      if (!(await canUserAccessConversation(req.user, conv))) {
+        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
       }
 
       const msg = await messageRepository.findByIdWithChannel(messageId);
@@ -531,12 +544,9 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      // Verificación IDOR: un operador solo actúa sobre sus canales.
-      if (req.user.role === 'agent') {
-        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
-          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
-        }
+      // Verificación IDOR y Aislamiento Multi-Tenant
+      if (!(await canUserAccessConversation(req.user, conv))) {
+        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
       }
 
       // 1. Registrar la venta antes de hablar con Meta.
@@ -605,11 +615,8 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      if (req.user.role === 'agent') {
-        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
-          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
-        }
+      if (!(await canUserAccessConversation(req.user, conv))) {
+        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
       }
 
       const ventas = await conversionRepository.listByConversation(id);
@@ -638,6 +645,10 @@ export const conversationController = {
       const conv = await conversationRepository.findById(id);
       if (!conv) {
         return res.status(404).json({ error: 'Conversación no encontrada' });
+      }
+
+      if (!(await canUserAccessConversation(req.user, conv))) {
+        return res.status(403).json({ error: 'Acceso no autorizado a esta conversación' });
       }
 
       await conversationRepository.updateBotStatus(id, botStatus, req.user.id);

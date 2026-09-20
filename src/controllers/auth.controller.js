@@ -38,7 +38,7 @@ export const authController = {
       // Payload seguro sin password_hash
       const userPayload = {
         id: user.id,
-        team_id: user.team_id || 1,
+        team_id: user.role === 'superadmin' ? null : (user.team_id || null),
         email: user.email,
         name: user.name,
         role: user.role
@@ -109,7 +109,7 @@ export const authController = {
       return res.status(200).json({
         user: {
           id: user.id,
-          team_id: user.team_id || 1,
+          team_id: user.role === 'superadmin' ? null : (user.team_id || null),
           email: user.email,
           name: user.name,
           role: user.role
@@ -120,7 +120,7 @@ export const authController = {
       return res.status(200).json({
         user: {
           id: req.user.id,
-          team_id: req.user.team_id || 1,
+          team_id: req.user.role === 'superadmin' ? null : (req.user.team_id || null),
           email: req.user.email,
           name: req.user.name,
           role: req.user.role

@@ -47,11 +47,17 @@ export const mediaController = {
         return res.status(404).json({ error: 'Mensaje no encontrado' });
       }
 
-      // Aislamiento por canal: un operador solo ve los medios de sus canales.
-      if (req.user.role === 'agent') {
-        const asignados = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!asignados.includes(mensaje.channel_id)) {
-          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+      // Aislamiento Multi-Tenant y por canal
+      if (req.user.role !== 'superadmin') {
+        const canal = await channelRepository.findById(mensaje.channel_id);
+        if (!canal || (req.user.team_id && canal.team_id !== req.user.team_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este recurso' });
+        }
+        if (req.user.role === 'agent') {
+          const asignados = await userRepository.getAssignedChannelIds(req.user.id);
+          if (!asignados.includes(mensaje.channel_id)) {
+            return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+          }
         }
       }
 

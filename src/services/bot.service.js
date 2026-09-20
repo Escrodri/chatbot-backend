@@ -31,7 +31,7 @@ export const botService = {
     }
 
     // 2. Obtener configuración del bot para este canal
-    const botConfig = await botRepository.getSettingsForChannel(channel.id);
+    const botConfig = await botRepository.getSettingsForChannel(channel.team_id, channel.id);
     if (!botConfig || !botConfig.is_enabled) {
       return null;
     }

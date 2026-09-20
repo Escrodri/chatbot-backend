@@ -56,9 +56,10 @@ CREATE TABLE IF NOT EXISTS user_channel_assignments (
     PRIMARY KEY (user_id, channel_id)
 );
 
--- 4. Configuración del Chatbot por Canal
+-- 4. Configuración del Chatbot por Canal o por Equipo
 CREATE TABLE IF NOT EXISTS bot_settings (
     id SERIAL PRIMARY KEY,
+    team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
     channel_id INTEGER REFERENCES channels(id) ON DELETE CASCADE,
     is_enabled BOOLEAN DEFAULT TRUE,
     welcome_message TEXT NOT NULL DEFAULT '¡Hola! Gracias por comunicarte con nosotros. Un asesor te atenderá a la brevedad. ¿En qué podemos ayudarte?',
@@ -90,7 +91,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     unread_count INTEGER DEFAULT 0,
     bot_status VARCHAR(20) DEFAULT 'active' CHECK(bot_status IN ('active', 'handed_over', 'disabled')),
     assigned_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(channel_id, contact_id)
 );
 
 -- 7. Mensajes Individuales con Deduplicación
@@ -123,8 +125,14 @@ CREATE TABLE IF NOT EXISTS webhook_logs (
 
 -- Índices de Rendimiento y Concurrencia
 CREATE INDEX IF NOT EXISTS idx_channels_lookup ON channels(channel_identifier, status);
+CREATE INDEX IF NOT EXISTS idx_channels_team ON channels(team_id, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_users_team ON users(team_id, role);
+CREATE INDEX IF NOT EXISTS idx_bot_settings_team ON bot_settings(team_id, channel_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_lookup ON contacts(channel_id, platform_user_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_channel ON conversations(channel_id, last_message_time DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_channel_contact ON conversations(channel_id, contact_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_settings_channel_unique ON bot_settings(channel_id) WHERE channel_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_settings_team_default_unique ON bot_settings(team_id) WHERE channel_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_conv_cursor ON messages(conversation_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_meta_id ON messages(meta_message_id);
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_created ON webhook_logs(created_at DESC);
