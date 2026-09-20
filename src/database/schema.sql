@@ -123,16 +123,10 @@ CREATE TABLE IF NOT EXISTS webhook_logs (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- Índices de Rendimiento y Concurrencia
+-- Índices de Rendimiento y Concurrencia Base
 CREATE INDEX IF NOT EXISTS idx_channels_lookup ON channels(channel_identifier, status);
-CREATE INDEX IF NOT EXISTS idx_channels_team ON channels(team_id, deleted_at);
-CREATE INDEX IF NOT EXISTS idx_users_team ON users(team_id, role);
-CREATE INDEX IF NOT EXISTS idx_bot_settings_team ON bot_settings(team_id, channel_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_lookup ON contacts(channel_id, platform_user_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_channel ON conversations(channel_id, last_message_time DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_channel_contact ON conversations(channel_id, contact_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_settings_channel_unique ON bot_settings(channel_id) WHERE channel_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_settings_team_default_unique ON bot_settings(team_id) WHERE channel_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_conv_cursor ON messages(conversation_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_meta_id ON messages(meta_message_id);
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_created ON webhook_logs(created_at DESC);

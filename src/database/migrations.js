@@ -18,22 +18,51 @@ export async function initDatabase() {
 
   const client = await pool.connect();
   try {
-    // 1. Cargar y ejecutar DDL
+    // 1. Cargar y ejecutar DDL base
     const schemaPath = path.join(__dirname, 'schema.sql');
     const schemaSql = fs.readFileSync(schemaPath, 'utf8');
 
-    await client.query(schemaSql);
-    await client.query('ALTER TABLE channels ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL');
-    await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE');
-    await client.query('ALTER TABLE channels ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE');
-    await client.query('ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE');
-    await client.query("ALTER TABLE teams ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'");
-    await client.query('ALTER TABLE teams ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE');
+    try {
+      await client.query(schemaSql);
+    } catch (sErr) {
+      console.warn('⚠️ [DATABASE] Nota al ejecutar schema base (posibles objetos existentes):', sErr.message);
+    }
 
-    // Índices de rendimiento multi-tenant
-    await client.query('CREATE INDEX IF NOT EXISTS idx_channels_team ON channels(team_id, deleted_at)');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_users_team ON users(team_id, role)');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_bot_settings_team ON bot_settings(team_id, channel_id)');
+    // 2. Aplicar columnas multi-tenant de forma resiliente e individual
+    const columnMigrations = [
+      'ALTER TABLE channels ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL',
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE',
+      'ALTER TABLE channels ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE',
+      'ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE',
+      "ALTER TABLE teams ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'",
+      'ALTER TABLE teams ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE',
+      'ALTER TABLE teams ADD COLUMN IF NOT EXISTS meta_app_id VARCHAR(100)',
+      'ALTER TABLE teams ADD COLUMN IF NOT EXISTS meta_app_secret_encrypted TEXT',
+      "ALTER TABLE teams ADD COLUMN IF NOT EXISTS meta_verify_token VARCHAR(255) DEFAULT 'meta_webhook_verify_token_secure_2026'"
+    ];
+
+    for (const sql of columnMigrations) {
+      try {
+        await client.query(sql);
+      } catch (colErr) {
+        console.warn('⚠️ [DATABASE MIGRATION NOTICE]:', colErr.message);
+      }
+    }
+
+    // 3. Índices de rendimiento multi-tenant
+    const indexMigrations = [
+      'CREATE INDEX IF NOT EXISTS idx_channels_team ON channels(team_id, deleted_at)',
+      'CREATE INDEX IF NOT EXISTS idx_users_team ON users(team_id, role)',
+      'CREATE INDEX IF NOT EXISTS idx_bot_settings_team ON bot_settings(team_id, channel_id)'
+    ];
+
+    for (const idxSql of indexMigrations) {
+      try {
+        await client.query(idxSql);
+      } catch (idxErr) {
+        console.warn('⚠️ [DATABASE INDEX NOTICE]:', idxErr.message);
+      }
+    }
 
     // Deduplicar conversaciones (channel_id, contact_id) si existieran antes de aplicar la restricción UNIQUE
     try {

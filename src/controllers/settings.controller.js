@@ -706,11 +706,13 @@ export const settingsController = {
    */
   async getBotSettings(req, res) {
     try {
-      const channelId = req.query.channel_id ? parseInt(req.query.channel_id, 10) : null;
+      const parsedChannelId = req.query.channel_id ? parseInt(req.query.channel_id, 10) : null;
+      const channelId = (!parsedChannelId || isNaN(parsedChannelId)) ? null : parsedChannelId;
       const teamId = req.user?.team_id || null;
       const settings = await botRepository.getSettingsForChannel(teamId, channelId);
       return res.json(settings);
     } catch (error) {
+      console.error('Error al obtener la configuración del bot:', error);
       return res.status(500).json({ error: 'Error al obtener la configuración del bot: ' + error.message });
     }
   },

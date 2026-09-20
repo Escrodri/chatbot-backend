@@ -17,6 +17,7 @@ settingsRouter.delete('/channels/:id', settingsController.deleteChannel);
 settingsRouter.post('/channels/scan-facebook-pages', settingsController.scanFacebookPages);
 settingsRouter.post('/channels/connect-facebook-pages', settingsController.connectFacebookPages);
 settingsRouter.get('/channels/meta-app-info', settingsController.getMetaAppInfo);
+settingsRouter.get('/meta-app-info', settingsController.getMetaAppInfo);
 settingsRouter.post('/channels/meta-config', settingsController.saveTeamMetaConfig);
 settingsRouter.delete('/channels/meta-config', settingsController.clearTeamMetaConfig);
 settingsRouter.post('/channels/facebook-exchange-code', settingsController.exchangeFacebookCode);
