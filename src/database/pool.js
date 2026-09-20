@@ -21,7 +21,8 @@ function resolveSsl() {
   if (forzado === 'true' || forzado === '1') return { rejectUnauthorized: false };
 
   const url = config.database.url || '';
-  const esLocal = /@(localhost|127\.0\.0\.1|\[::1\]|postgres|db)(:|\/)/.test(url);
+  // Detecta localhost y contenedores Docker internos (ej: postgres, db, backend-lecturas_postgres, etc.)
+  const esLocal = /@(localhost|127\.0\.0\.1|\[::1\]|postgres|db|[^/:]*_postgres|[^/:]*-postgres|[^/:]*_db|[^/:]*-db)(:|\/)/i.test(url);
 
   return esLocal ? false : { rejectUnauthorized: false };
 }

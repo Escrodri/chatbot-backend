@@ -57,7 +57,7 @@ export const graphApiService = {
     mimeType = null,
     isViewOnce = false
   }) {
-    const apiVersion = config.meta.apiVersion || 'v26.0';
+    const apiVersion = config.meta.apiVersion || 'v21.0';
     const accessToken = channel.accessToken;
 
     if (!accessToken) {
@@ -88,7 +88,8 @@ export const graphApiService = {
     function resolveFullMediaUrl(mediaUrl) {
       if (!mediaUrl) return '';
       if (/^https?:\/\//i.test(mediaUrl)) return mediaUrl;
-      const baseUrl = (process.env.BACKEND_PUBLIC_URL || (config.isProd ? 'https://chatbot-backend-aq9n.onrender.com' : 'http://localhost:3000')).replace(/\/+$/, '');
+      const fallbackUrl = (config.security.allowedOrigins && config.security.allowedOrigins[0]) || (config.isProd ? '' : 'http://localhost:3000');
+      const baseUrl = (process.env.BACKEND_PUBLIC_URL || fallbackUrl).replace(/\/+$/, '');
       return `${baseUrl}${mediaUrl.startsWith('/') ? mediaUrl : `/${mediaUrl}`}`;
     }
 
@@ -295,7 +296,7 @@ export const graphApiService = {
    * Devuelve el ID del medio en los servidores de Meta (media_id).
    */
   async uploadMediaToWhatsApp({ channel, accessToken, filePath, mimeType }) {
-    const apiVersion = config.meta.apiVersion || 'v26.0';
+    const apiVersion = config.meta.apiVersion || 'v21.0';
     const url = `${META_API_BASE}/${apiVersion}/${channel.channel_identifier}/media`;
 
     const fileBuffer = fs.readFileSync(filePath);
@@ -327,7 +328,7 @@ export const graphApiService = {
    * Devuelve el attachment_id en los servidores de Meta.
    */
   async uploadAttachmentToMessenger({ channel, accessToken, filePath, attachmentType }) {
-    const apiVersion = config.meta.apiVersion || 'v26.0';
+    const apiVersion = config.meta.apiVersion || 'v21.0';
     const url = `${META_API_BASE}/${apiVersion}/me/message_attachments`;
 
     const fileBuffer = fs.readFileSync(filePath);
@@ -366,7 +367,7 @@ export const graphApiService = {
    */
   async fetchUserProfile({ platform, platformUserId, accessToken }) {
     if (!platformUserId || !accessToken) return null;
-    const apiVersion = config.meta.apiVersion || 'v26.0';
+    const apiVersion = config.meta.apiVersion || 'v21.0';
 
     try {
       let fields = '';
