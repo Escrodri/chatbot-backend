@@ -442,23 +442,56 @@ export const settingsController = {
       console.warn('⚠️ [SCAN PAGES] No se pudieron verificar los permisos:', permErr.message);
     }
 
-    // 3. Traer las páginas del perfil y sus cuentas de Instagram vinculadas
-    const accountsRes = await fetch(
-      `https://graph.facebook.com/${apiVersion}/me/accounts?fields=id,name,category,access_token,instagram_business_account{id,username,name}&access_token=${effectiveToken}`
-    );
-    const accountsData = await accountsRes.json();
+    // 3a. Traer las páginas asociadas directamente al perfil (/me/accounts)
+    const rawPages = [];
+    let accountsError = null;
 
-    if (!accountsRes.ok || accountsData.error) {
-      const errorMsg = accountsData.error?.message || 'Error al comunicarse con Meta Graph API';
+    try {
+      const accountsRes = await fetch(
+        `https://graph.facebook.com/${apiVersion}/me/accounts?fields=id,name,category,access_token,instagram_business_account{id,username,name}&access_token=${effectiveToken}`
+      );
+      const accountsData = await accountsRes.json();
+      if (accountsRes.ok && Array.isArray(accountsData.data)) {
+        rawPages.push(...accountsData.data);
+      } else if (accountsData.error) {
+        accountsError = accountsData.error;
+        console.warn('⚠️ [SCAN PAGES] Error en /me/accounts:', accountsData.error.message);
+      }
+    } catch (accErr) {
+      console.warn('⚠️ [SCAN PAGES] Fallo al consultar /me/accounts:', accErr.message);
+    }
+
+    // 3b. Consultar también los Business Managers del usuario (/me/businesses)
+    try {
+      const bizRes = await fetch(
+        `https://graph.facebook.com/${apiVersion}/me/businesses?fields=id,name,owned_pages{id,name,category,access_token,instagram_business_account{id,username,name}},client_pages{id,name,category,access_token,instagram_business_account{id,username,name}}&access_token=${effectiveToken}`
+      );
+      if (bizRes.ok) {
+        const bizData = await bizRes.json();
+        const businesses = bizData.data || [];
+        for (const biz of businesses) {
+          const owned = biz.owned_pages?.data || [];
+          const client = biz.client_pages?.data || [];
+          for (const p of [...owned, ...client]) {
+            rawPages.push({
+              ...p,
+              category: p.category || `Business (${biz.name})`
+            });
+          }
+        }
+      }
+    } catch (bizErr) {
+      console.warn('⚠️ [SCAN BUSINESS] Consulta de Business Manager omitida:', bizErr.message);
+    }
+
+    if (rawPages.length === 0 && accountsError) {
       return {
-        error: `Meta Graph API error: ${errorMsg}`,
-        metaError: accountsData.error
+        error: `Meta Graph API error: ${accountsError.message || 'Error al comunicarse con Meta Graph API'}`,
+        metaError: accountsError
       };
     }
 
-    const rawPages = accountsData.data || [];
-
-    // Deduplicar páginas devueltas por Meta (en caso de que el usuario tenga roles duplicados por Business Manager)
+    // Deduplicar páginas devueltas por Meta (en caso de que el usuario tenga roles en Business Manager y perfil)
     const uniqueRawPages = [];
     const seenScanIds = new Set();
     for (const page of rawPages) {
@@ -497,7 +530,7 @@ export const settingsController = {
       })
     );
 
-    const recommended = ['pages_show_list', 'pages_messaging', 'pages_manage_metadata'];
+    const recommended = ['pages_show_list', 'pages_messaging', 'pages_manage_metadata', 'business_management'];
     const missingRecommended = recommended.filter(p => !grantedPermissions.includes(p));
 
     return {
