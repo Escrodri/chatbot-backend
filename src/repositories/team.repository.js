@@ -8,7 +8,12 @@ export const teamRepository = {
    */
   async findById(teamId) {
     const { rows } = await query(
-      'SELECT id, name, meta_app_id, meta_app_secret_encrypted, token_iv, token_tag, created_at FROM teams WHERE id = $1',
+      `SELECT id, name, meta_app_id, 
+              COALESCE(status, 'active') AS status, 
+              COALESCE(is_active, true) AS is_active, 
+              (meta_app_secret_encrypted IS NOT NULL) AS has_meta_secret,
+              created_at 
+       FROM teams WHERE id = $1`,
       [teamId]
     );
     return rows[0] || null;

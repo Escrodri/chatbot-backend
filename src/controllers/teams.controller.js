@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { teamRepository } from '../repositories/team.repository.js';
 import { userRepository } from '../repositories/user.repository.js';
+import { channelRepository } from '../repositories/channel.repository.js';
 
 export const teamsController = {
   /**
@@ -13,6 +14,207 @@ export const teamsController = {
       return res.json(teams);
     } catch (error) {
       return res.status(500).json({ error: 'Error al listar equipos: ' + error.message });
+    }
+  },
+
+  /**
+   * Obtiene la información completa de un equipo, sus operadores y sus canales.
+   * GET /api/teams/:id
+   */
+  async getTeamDetails(req, res) {
+    try {
+      const teamId = parseInt(req.params.id, 10);
+      if (!teamId) return res.status(400).json({ error: 'ID de equipo inválido.' });
+
+      const team = await teamRepository.findById(teamId);
+      if (!team) return res.status(404).json({ error: 'Equipo no encontrado.' });
+
+      const users = await userRepository.listAll(teamId);
+      const channels = await channelRepository.listAll(teamId);
+
+      return res.json({
+        team,
+        users,
+        channels
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al obtener detalle del equipo: ' + error.message });
+    }
+  },
+
+  /**
+   * Lista los operadores y administradores de un equipo.
+   * GET /api/teams/:id/users
+   */
+  async getTeamUsers(req, res) {
+    try {
+      const teamId = parseInt(req.params.id, 10);
+      if (!teamId) return res.status(400).json({ error: 'ID de equipo inválido.' });
+
+      const users = await userRepository.listAll(teamId);
+      return res.json(users);
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al listar usuarios del equipo: ' + error.message });
+    }
+  },
+
+  /**
+   * Registra un nuevo operador o administrador dentro de un equipo.
+   * POST /api/teams/:id/users
+   */
+  async createTeamUser(req, res) {
+    try {
+      const teamId = parseInt(req.params.id, 10);
+      if (!teamId) return res.status(400).json({ error: 'ID de equipo inválido.' });
+
+      const team = await teamRepository.findById(teamId);
+      if (!team) return res.status(404).json({ error: 'Equipo no encontrado.' });
+
+      const { email, password, name, role = 'agent', channelIds } = req.body || {};
+
+      if (!email || !email.includes('@')) {
+        return res.status(400).json({ error: 'Correo electrónico inválido.' });
+      }
+      if (!password || password.length < 12) {
+        return res.status(400).json({ error: 'La contraseña debe tener al menos 12 caracteres.' });
+      }
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ error: 'El nombre del operador es obligatorio.' });
+      }
+      if (!['admin', 'agent'].includes(role)) {
+        return res.status(400).json({ error: 'Rol inválido. Debe ser admin o agent.' });
+      }
+
+      const existing = await userRepository.findByEmail(email);
+      if (existing) {
+        return res.status(409).json({ error: 'Ya existe un usuario con ese correo electrónico.' });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 12);
+      const newUser = await userRepository.create({
+        teamId,
+        email,
+        passwordHash,
+        name: String(name).trim(),
+        role,
+        isActive: true
+      });
+
+      if (Array.isArray(channelIds) && channelIds.length > 0) {
+        newUser.channel_ids = await userRepository.setAssignedChannels(newUser.id, channelIds);
+      } else {
+        newUser.channel_ids = [];
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: `Usuario "${newUser.name}" registrado correctamente en el equipo "${team.name}".`,
+        user: newUser
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al crear usuario del equipo: ' + error.message });
+    }
+  },
+
+  /**
+   * Actualiza los datos de un operador (nombre, email, rol, contraseña, canales).
+   * PUT /api/teams/:id/users/:userId
+   */
+  async updateTeamUser(req, res) {
+    try {
+      const teamId = parseInt(req.params.id, 10);
+      const userId = parseInt(req.params.userId, 10);
+      if (!teamId || !userId) return res.status(400).json({ error: 'IDs inválidos.' });
+
+      const user = await userRepository.findById(userId);
+      if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
+
+      const { name, email, role, isActive, password, channelIds } = req.body || {};
+
+      if (email && email.toLowerCase().trim() !== user.email.toLowerCase()) {
+        if (!email.includes('@')) {
+          return res.status(400).json({ error: 'Correo electrónico inválido.' });
+        }
+        const existing = await userRepository.findByEmail(email);
+        if (existing && existing.id !== userId) {
+          return res.status(409).json({ error: 'Ya existe otro usuario con ese correo electrónico.' });
+        }
+      }
+
+      let passwordHash = undefined;
+      if (password && String(password).trim()) {
+        if (String(password).trim().length < 12) {
+          return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 12 caracteres.' });
+        }
+        passwordHash = await bcrypt.hash(String(password).trim(), 12);
+      }
+
+      const updateData = {};
+      if (name !== undefined && String(name).trim()) updateData.name = String(name).trim();
+      if (email !== undefined && String(email).trim()) updateData.email = String(email).toLowerCase().trim();
+      if (role !== undefined && ['admin', 'agent', 'superadmin'].includes(role)) updateData.role = role;
+      if (isActive !== undefined) updateData.isActive = Boolean(isActive);
+      if (passwordHash) updateData.passwordHash = passwordHash;
+
+      const updated = await userRepository.updateUser(userId, updateData);
+
+      if (Array.isArray(channelIds)) {
+        updated.channel_ids = await userRepository.setAssignedChannels(userId, channelIds);
+      } else {
+        updated.channel_ids = await userRepository.getAssignedChannelIds(userId);
+      }
+
+      return res.json({
+        success: true,
+        message: `Usuario "${updated.name}" actualizado correctamente.`,
+        user: updated
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al actualizar usuario: ' + error.message });
+    }
+  },
+
+  /**
+   * Alterna el estado activo/inactivo de un operador (soft toggle).
+   * PATCH /api/teams/:id/users/:userId/status
+   */
+  async toggleTeamUserStatus(req, res) {
+    try {
+      const userId = parseInt(req.params.userId, 10);
+      if (!userId) return res.status(400).json({ error: 'ID de usuario inválido.' });
+
+      const user = await userRepository.findById(userId);
+      if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
+
+      if (user.role === 'superadmin') {
+        return res.status(400).json({ error: 'El Superadministrador no puede ser desactivado.' });
+      }
+
+      const updated = await userRepository.toggleStatus(userId);
+      const accion = updated.is_active ? 'activado' : 'desactivado';
+      return res.json({
+        success: true,
+        message: `Usuario "${updated.name}" ${accion} exitosamente.`,
+        user: updated
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al cambiar estado del usuario: ' + error.message });
+    }
+  },
+
+  /**
+   * Lista los canales vinculados a un equipo.
+   * GET /api/teams/:id/channels
+   */
+  async getTeamChannels(req, res) {
+    try {
+      const teamId = parseInt(req.params.id, 10);
+      if (!teamId) return res.status(400).json({ error: 'ID de equipo inválido.' });
+
+      const channels = await channelRepository.listAll(teamId);
+      return res.json(channels);
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al listar canales del equipo: ' + error.message });
     }
   },
 

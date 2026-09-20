@@ -158,6 +158,70 @@ export const userRepository = {
     } finally {
       client.release();
     }
+  },
+
+  /**
+   * Actualiza los datos de un usuario existente.
+   * @param {number} userId
+   * @param {{ name?: string, email?: string, role?: string, isActive?: boolean, passwordHash?: string, teamId?: number }} data
+   * @returns {Promise<object|null>}
+   */
+  async updateUser(userId, data = {}) {
+    const fields = [];
+    const values = [];
+    let idx = 1;
+
+    if (data.name !== undefined && String(data.name).trim()) {
+      fields.push(`name = $${idx++}`);
+      values.push(String(data.name).trim());
+    }
+    if (data.email !== undefined && String(data.email).trim()) {
+      fields.push(`email = $${idx++}`);
+      values.push(String(data.email).toLowerCase().trim());
+    }
+    if (data.role !== undefined && ['admin', 'agent', 'superadmin'].includes(data.role)) {
+      fields.push(`role = $${idx++}`);
+      values.push(data.role);
+    }
+    if (data.isActive !== undefined) {
+      fields.push(`is_active = $${idx++}`);
+      values.push(Boolean(data.isActive));
+    }
+    if (data.passwordHash) {
+      fields.push(`password_hash = $${idx++}`);
+      values.push(data.passwordHash);
+    }
+    if (data.teamId !== undefined && Number.isInteger(data.teamId)) {
+      fields.push(`team_id = $${idx++}`);
+      values.push(data.teamId);
+    }
+
+    if (fields.length > 0) {
+      values.push(userId);
+      await query(
+        `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx}`,
+        values
+      );
+    }
+
+    return this.findById(userId);
+  },
+
+  /**
+   * Alterna el estado activo/inactivo de un usuario (soft toggle).
+   * @param {number} userId
+   * @returns {Promise<object|null>}
+   */
+  async toggleStatus(userId) {
+    const user = await this.findById(userId);
+    if (!user) return null;
+
+    const newStatus = !user.is_active;
+    const { rows } = await query(
+      `UPDATE users SET is_active = $1 WHERE id = $2 RETURNING id, team_id, email, name, role, is_active, created_at`,
+      [newStatus, userId]
+    );
+    return rows[0] || null;
   }
 };
 
