@@ -149,16 +149,20 @@ export const channelRepository = {
    * 
    * @returns {Promise<Array>}
    */
-  async listAll() {
-    const { rows } = await query(
-      `SELECT id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at,
+  async listAll(teamId) {
+    let sql = `SELECT id, team_id, platform, name, channel_identifier, app_id, color_tag, status, error_message, created_at, updated_at,
               dataset_id, waba_id, 
               (app_secret_encrypted IS NOT NULL) AS tiene_app_secret,
               (conversions_token_encrypted IS NOT NULL) AS tiene_token_conversiones 
        FROM channels 
-       WHERE deleted_at IS NULL
-       ORDER BY id ASC`
-    );
+       WHERE deleted_at IS NULL`;
+    const params = [];
+    if (teamId) {
+      sql += ` AND team_id = $1`;
+      params.push(teamId);
+    }
+    sql += ` ORDER BY id ASC`;
+    const { rows } = await query(sql, params);
     return rows;
   },
 
@@ -168,10 +172,10 @@ export const channelRepository = {
    * preservando el historial de conversaciones, mensajes y asignaciones.
    * Evita 'duplicate key value violates unique constraint "channels_channel_identifier_key"'.
    * 
-   * @param {{ platform: string, name: string, channelIdentifier: string, appId?: string, appSecret?: string, accessToken: string, colorTag?: string, status?: string }} data
+   * @param {{ teamId?: number, platform: string, name: string, channelIdentifier: string, appId?: string, appSecret?: string, accessToken: string, colorTag?: string, status?: string }} data
    * @returns {Promise<object>}
    */
-  async upsert({ platform, name, channelIdentifier, appId = null, appSecret = null, accessToken, colorTag = '#25D366', status = 'active' }) {
+  async upsert({ teamId = 1, platform, name, channelIdentifier, appId = null, appSecret = null, accessToken, colorTag = '#25D366', status = 'active' }) {
     const encryptedToken = encryptSecret(accessToken.trim());
     let encryptedSecretJson = null;
     if (appSecret) {
@@ -181,12 +185,13 @@ export const channelRepository = {
 
     const { rows } = await query(
       `INSERT INTO channels (
-         platform, name, channel_identifier, app_id, 
+         team_id, platform, name, channel_identifier, app_id, 
          app_secret_encrypted, access_token_encrypted, token_iv, token_tag, color_tag,
          status, error_message, deleted_at, updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL, CURRENT_TIMESTAMP)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, CURRENT_TIMESTAMP)
        ON CONFLICT (channel_identifier) DO UPDATE SET
+         team_id = COALESCE(EXCLUDED.team_id, channels.team_id),
          platform = EXCLUDED.platform,
          name = EXCLUDED.name,
          app_id = COALESCE(EXCLUDED.app_id, channels.app_id),
@@ -199,8 +204,9 @@ export const channelRepository = {
          error_message = NULL,
          deleted_at = NULL,
          updated_at = CURRENT_TIMESTAMP
-       RETURNING id, platform, name, channel_identifier, app_id, color_tag, status, created_at, updated_at`,
+       RETURNING id, team_id, platform, name, channel_identifier, app_id, color_tag, status, created_at, updated_at`,
       [
+        teamId,
         platform,
         name.trim(),
         channelIdentifier.trim(),

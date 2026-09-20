@@ -3,6 +3,7 @@ import { channelRepository } from '../repositories/channel.repository.js';
 import { botRepository } from '../repositories/bot.repository.js';
 import { userRepository } from '../repositories/user.repository.js';
 import { logRepository } from '../repositories/log.repository.js';
+import { teamRepository } from '../repositories/team.repository.js';
 import envConfig from '../config/env.config.js';
 
 export const settingsController = {
@@ -15,7 +16,8 @@ export const settingsController = {
    */
   async getChannels(req, res) {
     try {
-      const channels = await channelRepository.listAll();
+      const teamId = req.user?.team_id || 1;
+      const channels = await channelRepository.listAll(teamId);
       return res.json(channels);
     } catch (error) {
       return res.status(500).json({ error: 'Error al obtener los canales: ' + error.message });
@@ -275,18 +277,73 @@ export const settingsController = {
   },
 
   /**
-   * Escanea las Fan Pages del perfil de Facebook del usuario a través de Meta Graph API v21.0.
-  /**
-   * Obtiene la configuración pública de verificación para Webhooks de Meta.
-   * SEGURIDAD MULTI-TENANT: No devuelve App ID ni secretos bajo ninguna circunstancia.
-   * Las credenciales de la App de Meta son ingresadas de forma manual y local
-   * por cada operador en su navegador para evitar exponer o bloquear cuentas de desarrollador.
+   * Obtiene la configuración pública y del equipo para la integración con Meta.
    */
   async getMetaAppInfo(req, res) {
-    return res.json({
-      verifyToken: envConfig.meta.verifyToken || 'meta_webhook_verify_token_secure_2026',
-      apiVersion: envConfig.meta.apiVersion || 'v26.0'
-    });
+    try {
+      const teamId = req.user?.team_id || 1;
+      const metaConfig = await teamRepository.getMetaConfig(teamId);
+
+      return res.json({
+        verifyToken: envConfig.meta.verifyToken || 'meta_webhook_verify_token_secure_2026',
+        apiVersion: envConfig.meta.apiVersion || 'v26.0',
+        appId: metaConfig.appId || null,
+        hasAppSecret: metaConfig.hasAppSecret
+      });
+    } catch (err) {
+      return res.json({
+        verifyToken: envConfig.meta.verifyToken || 'meta_webhook_verify_token_secure_2026',
+        apiVersion: envConfig.meta.apiVersion || 'v26.0',
+        appId: null,
+        hasAppSecret: false
+      });
+    }
+  },
+
+  /**
+   * Guarda las credenciales de la App de Meta (App ID y App Secret) para el equipo del usuario en PostgreSQL.
+   */
+  async saveTeamMetaConfig(req, res) {
+    try {
+      const teamId = req.user?.team_id || 1;
+      const { appId, appSecret } = req.body;
+
+      if (!appId || !String(appId).trim()) {
+        return res.status(400).json({ error: 'El App ID es obligatorio.' });
+      }
+
+      const updated = await teamRepository.updateMetaConfig(teamId, {
+        appId: String(appId).trim(),
+        appSecret: appSecret ? String(appSecret).trim() : null
+      });
+
+      return res.json({
+        success: true,
+        message: 'Credenciales de Meta guardadas exitosamente en la base de datos para tu equipo.',
+        data: {
+          appId: updated.appId,
+          hasAppSecret: updated.hasAppSecret
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al guardar credenciales de Meta: ' + error.message });
+    }
+  },
+
+  /**
+   * Elimina las credenciales de Meta del equipo en la base de datos.
+   */
+  async clearTeamMetaConfig(req, res) {
+    try {
+      const teamId = req.user?.team_id || 1;
+      await teamRepository.clearMetaConfig(teamId);
+      return res.json({
+        success: true,
+        message: 'Credenciales de Meta eliminadas de la base de datos de tu equipo.'
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al eliminar credenciales: ' + error.message });
+    }
   },
 
   /**
@@ -533,9 +590,14 @@ export const settingsController = {
    */
   async connectFacebookPages(req, res) {
     try {
+      const teamId = req.user?.team_id || 1;
       const { pages, appId = null, appSecret = null } = req.body;
       const finalAppId = (appId && String(appId).trim()) ? String(appId).trim() : null;
       const finalAppSecret = (appSecret && String(appSecret).trim()) ? String(appSecret).trim() : null;
+
+      if (finalAppId) {
+        await teamRepository.updateMetaConfig(teamId, { appId: finalAppId, appSecret: finalAppSecret });
+      }
 
       if (!Array.isArray(pages) || pages.length === 0) {
         return res.status(400).json({ error: 'Debes seleccionar al menos una página para conectar.' });
@@ -578,6 +640,7 @@ export const settingsController = {
 
         // B. Upsert atómico del canal de Facebook (idempotente: crea, actualiza o reactiva sin errores de duplicación)
         const fbChannel = await channelRepository.upsert({
+          teamId,
           platform: 'facebook',
           name: p.name || `Facebook Page ${pageId}`,
           channelIdentifier: pageId,
@@ -598,6 +661,7 @@ export const settingsController = {
             processedIgIds.add(igId);
 
             const igChannel = await channelRepository.upsert({
+              teamId,
               platform: 'instagram',
               name: `Instagram @${igUsername}`,
               channelIdentifier: igId,
@@ -672,7 +736,8 @@ export const settingsController = {
    */
   async getUsers(req, res) {
     try {
-      const users = await userRepository.listAll();
+      const teamId = req.user?.team_id || 1;
+      const users = await userRepository.listAll(teamId);
       return res.json(users);
     } catch (error) {
       return res.status(500).json({ error: 'Error al listar los usuarios: ' + error.message });
@@ -684,6 +749,7 @@ export const settingsController = {
    */
   async createUser(req, res) {
     try {
+      const teamId = req.user?.team_id || 1;
       const { email, password, name, role = 'agent', channelIds } = req.body;
 
       if (!email || !email.includes('@')) {
@@ -709,10 +775,12 @@ export const settingsController = {
 
       const passwordHash = await bcrypt.hash(password, 12);
       const newUser = await userRepository.create({
+        teamId,
         email,
         passwordHash,
         name: name.trim(),
-        role
+        role,
+        isActive: true
       });
 
       // Los operadores solo ven los canales que se les asignen (A-03).

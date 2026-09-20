@@ -12,7 +12,7 @@ export const userRepository = {
    */
   async findByEmail(email) {
     const { rows } = await query(
-      'SELECT id, email, password_hash, name, role, is_active, created_at FROM users WHERE email = $1',
+      'SELECT id, team_id, email, password_hash, name, role, is_active, created_at FROM users WHERE email = $1',
       [email.toLowerCase().trim()]
     );
     return rows[0] || null;
@@ -25,44 +25,51 @@ export const userRepository = {
    */
   async findById(id) {
     const { rows } = await query(
-      'SELECT id, email, name, role, is_active, created_at FROM users WHERE id = $1',
+      'SELECT id, team_id, email, name, role, is_active, created_at FROM users WHERE id = $1',
       [id]
     );
     return rows[0] || null;
   },
 
   /**
-   * Lista todos los operadores del sistema (omite password_hash por seguridad).
+   * Lista todos los operadores de un equipo (omite password_hash por seguridad).
    * Incluye los IDs de canales asignados para poder pintarlos en el panel.
+   * @param {number} [teamId]
    * @returns {Promise<Array>}
    */
-  async listAll() {
-    const { rows } = await query(
-      `SELECT
-         u.id, u.email, u.name, u.role, u.is_active, u.created_at,
+  async listAll(teamId) {
+    let sql = `SELECT
+         u.id, u.team_id, u.email, u.name, u.role, u.is_active, u.created_at,
          COALESCE(
            ARRAY_AGG(a.channel_id ORDER BY a.channel_id) FILTER (WHERE a.channel_id IS NOT NULL),
            '{}'
          ) AS channel_ids
        FROM users u
-       LEFT JOIN user_channel_assignments a ON a.user_id = u.id
-       GROUP BY u.id
-       ORDER BY u.id ASC`
-    );
+       LEFT JOIN user_channel_assignments a ON a.user_id = u.id`;
+    const params = [];
+
+    if (teamId) {
+      sql += ` WHERE u.team_id = $1`;
+      params.push(teamId);
+    }
+
+    sql += ` GROUP BY u.id ORDER BY u.id ASC`;
+
+    const { rows } = await query(sql, params);
     return rows;
   },
 
   /**
    * Registra un nuevo operador en la base de datos.
-   * @param {{ email: string, passwordHash: string, name: string, role?: string, isActive?: boolean }} data
+   * @param {{ teamId?: number, email: string, passwordHash: string, name: string, role?: string, isActive?: boolean }} data
    * @returns {Promise<object>}
    */
-  async create({ email, passwordHash, name, role = 'agent', isActive = true }) {
+  async create({ teamId = 1, email, passwordHash, name, role = 'agent', isActive = true }) {
     const { rows } = await query(
-      `INSERT INTO users (email, password_hash, name, role, is_active)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, email, name, role, is_active, created_at`,
-      [email.toLowerCase().trim(), passwordHash, name.trim(), role, isActive]
+      `INSERT INTO users (team_id, email, password_hash, name, role, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, team_id, email, name, role, is_active, created_at`,
+      [teamId, email.toLowerCase().trim(), passwordHash, name.trim(), role, isActive]
     );
     return rows[0];
   },

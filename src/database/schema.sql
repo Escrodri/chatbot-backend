@@ -2,9 +2,22 @@
 -- DDL OFICIAL POSTGRESQL 16: SISTEMA MULTI-CANAL ENTERPRISE (SDD CONTRACT)
 -- ==============================================================================
 
+-- 0. Equipos / Organizaciones (Multi-tenancy)
+CREATE TABLE IF NOT EXISTS teams (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    meta_app_id VARCHAR(100),
+    meta_app_secret_encrypted TEXT,
+    token_iv VARCHAR(64),
+    token_tag VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 1. Operadores del Sistema (Roles: admin, agent)
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
+    team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     name VARCHAR(255) NOT NULL,
@@ -16,6 +29,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- 2. Canales y Cuentas de Meta (Tokens cifrados con AES-256-GCM)
 CREATE TABLE IF NOT EXISTS channels (
     id SERIAL PRIMARY KEY,
+    team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
     platform VARCHAR(20) NOT NULL CHECK(platform IN ('whatsapp', 'instagram', 'facebook')),
     name VARCHAR(255) NOT NULL,
     channel_identifier VARCHAR(100) UNIQUE NOT NULL,  -- phone_number_id (WA) o page_id (FB/IG)
