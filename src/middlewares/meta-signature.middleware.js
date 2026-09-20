@@ -44,6 +44,9 @@ export async function verifyMetaSignature(req, res, next) {
   if (isFacebookOrInstagram && config.meta.facebookAppSecret) {
     candidateSecrets.add(config.meta.facebookAppSecret);
   }
+  if (isFacebookOrInstagram && config.meta.instagramAppSecret) {
+    candidateSecrets.add(config.meta.instagramAppSecret);
+  }
 
   // App Secret general (.env)
   if (config.meta.appSecret) {

@@ -6,6 +6,9 @@ import { calculateHmacSha256 } from '../src/utils/index.js';
 import { config } from '../src/config/index.js';
 
 test('T-12: POST /api/webhook responde HTTP 200 en < 50ms y procesa de forma no bloqueante', async () => {
+  const originalSecret = config.meta.appSecret;
+  config.meta.appSecret = originalSecret || 'test_meta_app_secret_suite_12345';
+
   const app = createApp();
   const server = http.createServer(app);
   await new Promise(r => server.listen(0, r));
@@ -55,6 +58,7 @@ test('T-12: POST /api/webhook responde HTTP 200 en < 50ms y procesa de forma no 
     assert.equal(data.status, 'EVENT_RECEIVED');
     assert.ok(duration < 250, `La respuesta debe ser inmediata (tomó ${duration}ms)`);
   } finally {
+    config.meta.appSecret = originalSecret;
     server.close();
   }
 });

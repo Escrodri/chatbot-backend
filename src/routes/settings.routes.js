@@ -18,6 +18,7 @@ settingsRouter.post('/channels/scan-facebook-pages', settingsController.scanFace
 settingsRouter.post('/channels/connect-facebook-pages', settingsController.connectFacebookPages);
 settingsRouter.get('/channels/meta-app-info', settingsController.getMetaAppInfo);
 settingsRouter.post('/channels/facebook-exchange-code', settingsController.exchangeFacebookCode);
+settingsRouter.post('/channels/instagram-lookup', settingsController.instagramLookup);
 
 // Chatbot
 settingsRouter.get('/bot', settingsController.getBotSettings);

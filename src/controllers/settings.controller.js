@@ -49,7 +49,27 @@ export const settingsController = {
       const existingAny = await channelRepository.findAnyByIdentifier(channelIdentifier.trim());
       if (existingAny) {
         if (!existingAny.deleted_at) {
-          return res.status(409).json({ error: 'Ya existe un canal activo configurado con ese identificador. Usa el botón Editar para modificarlo.' });
+          // Si ya existe activo, actualizar credenciales (App ID, App Secret, Token) de forma transparente
+          const updated = await channelRepository.update(existingAny.id, {
+            name: name.trim(),
+            accessToken: accessToken.trim(),
+            appId: appId ? appId.trim() : null,
+            appSecret: appSecret ? appSecret.trim() : null,
+            colorTag: colorTag || existingAny.color_tag
+          });
+
+          // Intentar suscribir webhook a la página o cuenta
+          if (platform === 'facebook' || platform === 'instagram') {
+            try {
+              const apiVersion = envConfig.meta.apiVersion || 'v26.0';
+              await fetch(
+                `https://graph.facebook.com/${apiVersion}/${channelIdentifier.trim()}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${accessToken.trim()}`,
+                { method: 'POST' }
+              );
+            } catch {}
+          }
+
+          return res.status(200).json(updated);
         }
 
         // Si estaba archivado/eliminado previamente, restaurarlo y reconectar todo su historial intacto
@@ -72,6 +92,17 @@ export const settingsController = {
         accessToken: accessToken.trim(),
         colorTag: colorTag || '#D4AF37'
       });
+
+      // Intentar suscribir webhook a la página o cuenta en Meta
+      if (platform === 'facebook' || platform === 'instagram') {
+        try {
+          const apiVersion = envConfig.meta.apiVersion || 'v26.0';
+          await fetch(
+            `https://graph.facebook.com/${apiVersion}/${channelIdentifier.trim()}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${accessToken.trim()}`,
+            { method: 'POST' }
+          );
+        } catch {}
+      }
 
       return res.status(201).json(newChannel);
     } catch (error) {
@@ -254,7 +285,8 @@ export const settingsController = {
       facebookAppId: envConfig.meta.facebookAppId || '',
       hasFacebookAppSecret: Boolean(envConfig.meta.facebookAppSecret),
       loginConfigId: envConfig.meta.loginConfigId || '',
-      apiVersion: envConfig.meta.apiVersion || 'v26.0'
+      verifyToken: envConfig.meta.verifyToken || 'meta_webhook_verify_token_secure_2026',
+      apiVersion: envConfig.meta.apiVersion || 'v21.0'
     });
   },
 
@@ -745,6 +777,81 @@ export const settingsController = {
       return res.json(logs);
     } catch (error) {
       return res.status(500).json({ error: 'Error al consultar logs de auditoría: ' + error.message });
+    }
+  },
+
+  /**
+   * Consulta Meta Graph API con un Access Token para detectar automáticamente
+   * cuentas comerciales de Instagram vinculadas.
+   */
+  async instagramLookup(req, res) {
+    try {
+      const { accessToken } = req.body;
+      if (!accessToken || !accessToken.trim()) {
+        return res.status(400).json({ error: 'El Access Token es obligatorio para detectar la cuenta de Instagram.' });
+      }
+      const token = accessToken.trim();
+      const apiVersion = envConfig.meta.apiVersion || 'v26.0';
+
+      // 1. Consultar /me directamente por si es un token de cuenta de Instagram o de Fan Page
+      try {
+        const meRes = await fetch(`https://graph.facebook.com/${apiVersion}/me?fields=id,name,username,instagram_business_account{id,username,name}&access_token=${token}`);
+        const meData = await meRes.json();
+
+        if (meRes.ok && meData) {
+          if (meData.instagram_business_account?.id) {
+            return res.status(200).json({
+              success: true,
+              account: {
+                id: meData.instagram_business_account.id,
+                username: meData.instagram_business_account.username || meData.instagram_business_account.name,
+                name: meData.instagram_business_account.name || meData.instagram_business_account.username,
+                source: `Vinculada a la página ${meData.name || meData.id}`
+              }
+            });
+          }
+          if (meData.username && meData.id) {
+            return res.status(200).json({
+              success: true,
+              account: {
+                id: meData.id,
+                username: meData.username,
+                name: meData.name || meData.username,
+                source: 'Cuenta directa'
+              }
+            });
+          }
+        }
+      } catch {}
+
+      // 2. Consultar /me/accounts (páginas administradas por el usuario con cuentas de Instagram vinculadas)
+      try {
+        const accRes = await fetch(`https://graph.facebook.com/${apiVersion}/me/accounts?fields=id,name,category,access_token,instagram_business_account{id,username,name}&access_token=${token}`);
+        const accData = await accRes.json();
+
+        if (accRes.ok && Array.isArray(accData.data)) {
+          for (const page of accData.data) {
+            if (page.instagram_business_account?.id) {
+              return res.status(200).json({
+                success: true,
+                account: {
+                  id: page.instagram_business_account.id,
+                  username: page.instagram_business_account.username || page.instagram_business_account.name,
+                  name: page.instagram_business_account.name || page.instagram_business_account.username,
+                  pageAccessToken: page.access_token || null,
+                  source: `Vinculada a la página "${page.name}"`
+                }
+              });
+            }
+          }
+        }
+      } catch {}
+
+      return res.status(404).json({
+        error: 'No se detectó automáticamente una cuenta de Instagram Business con ese token. Puedes ingresar el ID numérico manualmente.'
+      });
+    } catch (err) {
+      return res.status(500).json({ error: 'Error al consultar Instagram en Meta Graph API: ' + err.message });
     }
   }
 };

@@ -7,6 +7,9 @@ import { calculateHmacSha256 } from '../src/utils/index.js';
 import { config } from '../src/config/index.js';
 
 test('T-08: verifyMetaSignature valida y permite payloads legítimos de Meta', async () => {
+  const originalSecret = config.meta.appSecret;
+  config.meta.appSecret = originalSecret || 'test_meta_app_secret_suite_12345';
+
   const app = express();
   app.use(rawBodyJsonParser);
   app.post('/webhook', verifyMetaSignature, (req, res) => {
@@ -35,11 +38,15 @@ test('T-08: verifyMetaSignature valida y permite payloads legítimos de Meta', a
     const data = await res.json();
     assert.equal(data.status, 'EVENT_RECEIVED');
   } finally {
+    config.meta.appSecret = originalSecret;
     server.close();
   }
 });
 
 test('T-08: verifyMetaSignature rechaza firmas alteradas con 403 Forbidden', async () => {
+  const originalSecret = config.meta.appSecret;
+  config.meta.appSecret = originalSecret || 'test_meta_app_secret_suite_12345';
+
   const app = express();
   app.use(rawBodyJsonParser);
   app.post('/webhook', verifyMetaSignature, (req, res) => {
@@ -68,6 +75,7 @@ test('T-08: verifyMetaSignature rechaza firmas alteradas con 403 Forbidden', asy
     const data = await res.json();
     assert.equal(data.code, 'ERR_INVALID_META_SIGNATURE');
   } finally {
+    config.meta.appSecret = originalSecret;
     server.close();
   }
 });

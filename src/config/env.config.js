@@ -35,10 +35,8 @@ function validateEnv() {
     missingVars.push('DATABASE_URL o variables individuales (POSTGRES_USER, POSTGRES_DB)');
   }
 
-  // 3. Handshake de Meta
-  if (!process.env.META_VERIFY_TOKEN) {
-    missingVars.push('META_VERIFY_TOKEN (Token secreto para verificación de webhook Meta)');
-  }
+  // 3. Handshake de Meta (Opcional: si no está definido en .env, usa fallback por defecto)
+  // No bloquea el arranque para permitir configuración 100% manual desde el panel web.
 
   if (missingVars.length > 0) {
     console.error('❌ [CONFIG ERROR] Faltan variables de entorno obligatorias en el archivo backend/.env:');
@@ -99,19 +97,21 @@ export const envConfig = Object.freeze({
   },
 
   meta: {
-    appId: (process.env.META_APP_ID || '2381150255623992').trim(),
+    appId: (process.env.META_APP_ID || '').trim(),
     appSecret: (process.env.META_APP_SECRET || '').trim(),
     whatsappAppId: (process.env.META_WHATSAPP_APP_ID || '').trim(),
     whatsappAppSecret: (process.env.META_WHATSAPP_APP_SECRET || '').trim(),
     facebookAppId: (process.env.META_FACEBOOK_APP_ID || '').trim(),
     facebookAppSecret: (process.env.META_FACEBOOK_APP_SECRET || '').trim(),
+    instagramAppId: (process.env.META_INSTAGRAM_APP_ID || '').trim(),
+    instagramAppSecret: (process.env.META_INSTAGRAM_APP_SECRET || '').trim(),
     appSecrets: (process.env.META_APP_SECRETS || '')
       .split(',')
       .map(s => s.trim())
       .filter(Boolean),
-    verifyToken: (process.env.META_VERIFY_TOKEN || '').trim(),
+    verifyToken: (process.env.META_VERIFY_TOKEN || 'meta_webhook_verify_token_secure_2026').trim(),
     loginConfigId: (process.env.META_LOGIN_CONFIG_ID || '').trim(),
-    apiVersion: (process.env.META_API_VERSION || 'v26.0').trim(),
+    apiVersion: (process.env.META_API_VERSION || 'v21.0').trim(),
   },
 
   // API de Conversiones: informarle a Meta las ventas que salen de una
