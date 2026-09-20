@@ -276,3 +276,19 @@ test('T-22: POST /api/settings/channels/connect-facebook-pages conecta lista de 
   assert.ok(Array.isArray(data.channels));
   assert.equal(data.channels[0].channel_identifier, pageId);
 });
+
+test('T-22: GET /api/settings/channels/meta-app-info nunca devuelve appId ni secretos compartidos (aislamiento multi-tenant)', async () => {
+  const res = await fetch(`${baseUrl}/api/settings/channels/meta-app-info`, {
+    headers: { 'Authorization': `Bearer ${adminToken}` }
+  });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.appId, undefined, 'El backend nunca debe filtrar o propagar un appId global');
+  assert.equal(data.facebookAppId, undefined, 'El backend nunca debe filtrar facebookAppId');
+  assert.equal(data.appSecret, undefined);
+  assert.equal(data.facebookAppSecret, undefined);
+  assert.ok(data.verifyToken, 'Debe devolver el verifyToken para validación de webhooks');
+  assert.ok(data.apiVersion, 'Debe devolver la versión de la Graph API');
+});
+
