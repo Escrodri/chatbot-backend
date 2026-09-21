@@ -267,6 +267,23 @@ class SocketManager {
     if (!audience) return;
     audience.emit('channel_status_changed', { channelId, status, errorMessage });
   }
+
+  /**
+   * Avisa a la bandeja que un mensaje entrante no pudo llegar a n8n.
+   *
+   * Es un aviso para el equipo, no para el cliente: el mensaje ya está guardado
+   * y a la vista, lo que falta es que alguien lo conteste a mano mientras la
+   * automatización esté caída.
+   *
+   * @param {number} channelId
+   * @param {{conversationId: number, motivo: string, mensaje: string|null, detalle: string|null, en: string}} data
+   */
+  async emitAutomationAlert(channelId, data) {
+    const effectiveTeamId = await resolveTeamIdForChannel(channelId);
+    const audience = this._audience(channelId, effectiveTeamId);
+    if (!audience) return;
+    audience.emit('automation:alert', { channelId, ...data });
+  }
 }
 
 export const socketManager = new SocketManager();

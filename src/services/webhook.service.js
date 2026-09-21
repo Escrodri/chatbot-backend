@@ -274,12 +274,41 @@ export const webhookService = {
         // mensaje del cliente ya quedó guardado y la bandeja lo muestra igual.
         if (automationService.estaActiva()) {
           try {
-            await automationService.reenviarMensajeEntrante({
+            const reenvio = await automationService.reenviarMensajeEntrante({
               conversation,
               contact,
               channel,
               message: insertedMessage
             });
+
+            // Si n8n no pudo atender, nadie le contesta al cliente. El mensaje
+            // ya quedó guardado y visible en la bandeja, pero sin este registro
+            // el silencio parece normal. Queda anotado en la tabla de eventos y
+            // en la memoria del servicio, de donde lo lee el aviso de la bandeja.
+            //
+            // Solo entran acá las averías: que un asesor tenga tomado el chat no
+            // es una falla y no tiene que encender ninguna alarma.
+            if (reenvio.avisar) {
+              await logRepository.logEvent({
+                platform: event.platform,
+                channelIdentifier: event.channelIdentifier,
+                eventType: 'automation_unreachable',
+                rawPayload: {
+                  conversationId: conversation.id,
+                  motivo: reenvio.motivo,
+                  detalle: reenvio.detalle
+                },
+                status: 'ERROR'
+              });
+
+              socketManager.emitAutomationAlert(channel.id, {
+                conversationId: conversation.id,
+                motivo: reenvio.motivo,
+                mensaje: reenvio.mensaje,
+                detalle: reenvio.detalle,
+                en: reenvio.en
+              });
+            }
           } catch (autoErr) {
             console.error(`❌ [AUTOMATION ERROR] Error al reenviar a n8n:`, autoErr);
           }

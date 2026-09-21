@@ -11,6 +11,7 @@ import { orderRouter } from './order.routes.js';
 import { contactRouter } from './contact.routes.js';
 import { tagRouter } from './tag.routes.js';
 import { mediaRouter } from './media.routes.js';
+import { automationRouter } from './automation.routes.js';
 import { config } from '../config/index.js';
 
 export const apiRouter = Router();
@@ -41,6 +42,10 @@ apiRouter.use('/tags', tagRouter);
 
 // Entrega de archivos multimedia (con sesión y control por canal)
 apiRouter.use('/media', mediaRouter);
+
+// Estado de la automatización con n8n: lo consulta la bandeja para avisar
+// cuando un mensaje entrante no llegó al flujo
+apiRouter.use('/automation', automationRouter);
 
 // Montar router de webhooks de Meta en /api/webhook
 apiRouter.use('/webhook', webhookRouter);
