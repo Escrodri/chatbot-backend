@@ -33,6 +33,23 @@ export const orderRepository = {
     return rows[0] || null;
   },
 
+  /**
+   * Un pedido con todo lo que hace falta para entregarlo: el nombre del
+   * producto y su enlace de descarga. El enlace vive en el producto, no en el
+   * pedido, porque es el mismo para todos los que compran ese material.
+   */
+  async findConEntrega(id) {
+    const { rows } = await query(
+      `SELECT o.*, p.name AS product_name, p.slug AS product_slug,
+              p.delivery_url, p.delivery_note
+       FROM orders o
+       LEFT JOIN products p ON o.product_id = p.id
+       WHERE o.id = $1`,
+      [id]
+    );
+    return rows[0] || null;
+  },
+
   /** Todos los pedidos de una conversación, con el nombre del producto resuelto. */
   async listByConversation(conversationId) {
     const { rows } = await query(
@@ -71,7 +88,8 @@ export const orderRepository = {
     params.push(offset);
 
     const { rows } = await query(
-      `SELECT o.*, p.name AS product_name, p.slug AS product_slug
+      `SELECT o.*, p.name AS product_name, p.slug AS product_slug,
+              (p.delivery_url IS NOT NULL AND p.delivery_url <> '') AS product_entregable
        FROM orders o
        LEFT JOIN products p ON o.product_id = p.id
        ${where}
@@ -101,7 +119,10 @@ export const orderRepository = {
          (conversation_id, product_id, contact_phone, contact_name, amount, currency, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (conversation_id, product_id) DO UPDATE
-         SET updated_at = CURRENT_TIMESTAMP
+         SET updated_at = CURRENT_TIMESTAMP,
+             -- Cada mensaje que entra sin que el pedido avance suma uno. El
+             -- flujo lo usa para saber cuándo el guion dejó de servir.
+             bot_intentos = orders.bot_intentos + 1
        RETURNING *`,
       [conversationId, productId, contactPhone, contactName, amount, currency, status]
     );
@@ -115,7 +136,9 @@ export const orderRepository = {
    * son los dos momentos que después alguien va a querer auditar.
    */
   async cambiarEstado(id, estado, { confirmedBy = null, note = null, receiptCheck = null, receiptMessageId = null } = {}) {
-    const sets = ['status = $1', 'updated_at = CURRENT_TIMESTAMP'];
+    // Que el pedido avance significa que el guion sí entendió: el contador de
+    // intentos vuelve a cero y la IA deja de estar a un paso de intervenir.
+    const sets = ['status = $1', 'updated_at = CURRENT_TIMESTAMP', 'bot_intentos = 0'];
     const params = [estado];
 
     if (estado === 'pagado') {

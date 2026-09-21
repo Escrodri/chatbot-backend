@@ -45,6 +45,22 @@ export const tagRepository = {
     return this.listByTeam(teamId);
   },
 
+  /**
+   * Devuelve la etiqueta con ese nombre, y si no existe la crea.
+   *
+   * La usan las etiquetas que se ponen solas, como "Ya compró". Se busca sin
+   * distinguir mayúsculas para no terminar con "Ya compró" y "Ya Compró"
+   * conviviendo en la misma lista.
+   */
+  async asegurar({ teamId, name, color = '#6b7280' }) {
+    const { rows } = await query(
+      `SELECT * FROM tags WHERE team_id IS NOT DISTINCT FROM $1 AND LOWER(name) = LOWER($2) LIMIT 1`,
+      [teamId, name]
+    );
+    if (rows[0]) return rows[0];
+    return this.create({ teamId, name, color });
+  },
+
   async create({ teamId, name, color = '#6b7280', sortOrder = 0 }) {
     const { rows } = await query(
       `INSERT INTO tags (team_id, name, color, sort_order)

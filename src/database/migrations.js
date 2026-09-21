@@ -38,7 +38,13 @@ export async function initDatabase() {
       'ALTER TABLE teams ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE',
       'ALTER TABLE teams ADD COLUMN IF NOT EXISTS meta_app_id VARCHAR(100)',
       'ALTER TABLE teams ADD COLUMN IF NOT EXISTS meta_app_secret_encrypted TEXT',
-      "ALTER TABLE teams ADD COLUMN IF NOT EXISTS meta_verify_token VARCHAR(255) DEFAULT 'meta_webhook_verify_token_secure_2026'"
+      "ALTER TABLE teams ADD COLUMN IF NOT EXISTS meta_verify_token VARCHAR(255) DEFAULT 'meta_webhook_verify_token_secure_2026'",
+
+      // Cuántas veces contestó el bot sin que el pedido avance. Es el contador
+      // que decide cuándo dejar de insistir con el guion y llamar a la IA: si
+      // después de varios mensajes la persona sigue en "interesado", el guion
+      // claramente no está entendiendo lo que pregunta.
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS bot_intentos INTEGER NOT NULL DEFAULT 0'
     ];
 
     for (const sql of columnMigrations) {

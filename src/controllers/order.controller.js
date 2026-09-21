@@ -1,6 +1,7 @@
 import { orderRepository } from '../repositories/order.repository.js';
 import { productRepository } from '../repositories/product.repository.js';
 import { conversationRepository } from '../repositories/conversation.repository.js';
+import { deliveryService } from '../services/delivery.service.js';
 import { socketManager } from '../sockets/index.js';
 
 export const orderController = {
@@ -154,15 +155,48 @@ export const orderController = {
 
       if (!actualizado) return res.status(404).json({ error: 'Pedido no encontrado' });
 
-      const conv = await conversationRepository.findById(actualizado.conversation_id);
+      // Confirmar el pago y entregar el producto son, para el cliente, un solo
+      // momento: transfirió y espera su material. Hasta ahora el tablero hacía
+      // solo la mitad, cambiaba el estado en la base, y del otro lado no pasaba
+      // nada. Ahora el enlace sale apenas alguien confirma.
+      let entrega = null;
+      let estadoFinal = actualizado;
+
+      if (status === 'pagado') {
+        const conEntrega = await orderRepository.findConEntrega(actualizado.id);
+        entrega = await deliveryService.entregar(conEntrega, req.user?.id || null);
+
+        // Solo se marca entregado si el mensaje salió de verdad. Si falló, el
+        // pedido queda en 'pagado' y sigue visible en el tablero como pendiente
+        // de entrega, que es exactamente lo que hay que hacer con él.
+        if (entrega.enviado) {
+          const entregado = await orderRepository.cambiarEstado(actualizado.id, 'entregado', {
+            confirmedBy: req.user?.id || null
+          });
+          if (entregado) estadoFinal = entregado;
+        }
+
+        // La etiqueta sobrevive al pedido: mañana esta persona puede querer otro
+        // producto, y entonces el pedido viejo ya no dice nada útil sobre ella.
+        await deliveryService.marcarClienteQueCompro(actualizado.conversation_id);
+      }
+
+      // Rechazar también tiene que avisar. Un pedido marcado como rechazado y un
+      // cliente esperando en silencio es el mismo problema que había con el pago.
+      if (status === 'rechazado') {
+        const conEntrega = await orderRepository.findConEntrega(actualizado.id);
+        entrega = await deliveryService.avisarRechazo(conEntrega, req.user?.id || null);
+      }
+
+      const conv = await conversationRepository.findById(estadoFinal.conversation_id);
       if (conv) {
         socketManager.emitConversationUpdated(conv.channel_id, {
           id: conv.id,
-          order_status: actualizado.status
+          order_status: estadoFinal.status
         });
       }
 
-      return res.json(actualizado);
+      return res.json({ ...estadoFinal, entrega });
     } catch (error) {
       return res.status(500).json({ error: 'Error al actualizar el pedido: ' + error.message });
     }

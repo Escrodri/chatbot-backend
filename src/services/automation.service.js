@@ -1,4 +1,6 @@
 import { config } from '../config/index.js';
+import { channelRepository } from '../repositories/channel.repository.js';
+import { graphApiService } from './graph-api.service.js';
 
 /**
  * Puente hacia n8n.
@@ -70,6 +72,68 @@ function ahora() {
   return new Date().toISOString();
 }
 
+/**
+ * Minutos transcurridos desde una fecha. Devuelve null si no hay fecha, que es
+ * el caso del primer mensaje de una conversación.
+ */
+function minutosDesde(fecha) {
+  if (!fecha) return null;
+  const t = new Date(fecha).getTime();
+  if (isNaN(t)) return null;
+  return Math.max(0, Math.round((Date.now() - t) / 60000));
+}
+
+/**
+ * Todo lo que sigue existe para decidir una sola cosa: si corresponde saludar.
+ *
+ * El servidor corre en UTC y los clientes están en Paraguay, así que la cuenta
+ * hay que hacerla en hora local o el corte del día cae a las nueve de la noche.
+ */
+const ZONA = 'America/Asuncion';
+
+/** Fecha en formato AAAA-MM-DD según el calendario paraguayo. */
+function diaEnParaguay(fecha) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: ZONA, year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(fecha);
+}
+
+/** Hora del día (0-23) en Paraguay. */
+function horaEnParaguay(fecha) {
+  const partes = new Intl.DateTimeFormat('en-GB', {
+    timeZone: ZONA, hour: '2-digit', hour12: false
+  }).formatToParts(fecha);
+  const h = partes.find(p => p.type === 'hour');
+  return h ? parseInt(h.value, 10) : 12;
+}
+
+/**
+ * "Buen día" a secas suena a formulario. La gente saluda según la hora, y es de
+ * las cosas más baratas que se pueden hacer para que no parezca un robot.
+ */
+function saludoSegunHora(fecha) {
+  const h = horaEnParaguay(fecha);
+  if (h < 12) return 'Buen día';
+  if (h < 19) return 'Buenas tardes';
+  return 'Buenas noches';
+}
+
+/**
+ * ¿El mensaje anterior de esta persona fue otro día?
+ *
+ * Se compara el día del calendario y no una cantidad de horas, porque es así
+ * como lo vive el cliente: escribir a la mañana después de haber escrito anoche
+ * es "otro día" aunque hayan pasado solo nueve horas, y escribir a las once de
+ * la noche después de haber escrito a las nueve de la mañana sigue siendo el
+ * mismo día aunque hayan pasado catorce.
+ */
+function esOtroDia(ultimaInteraccion) {
+  if (!ultimaInteraccion) return true;
+  const antes = new Date(ultimaInteraccion);
+  if (isNaN(antes.getTime())) return true;
+  return diaEnParaguay(antes) !== diaEnParaguay(new Date());
+}
+
 function resultado({ ok, motivo = null, detalle = null, conversationId = null }) {
   const salida = {
     ok,
@@ -94,6 +158,104 @@ function resultado({ ok, motivo = null, detalle = null, conversationId = null })
   }
 
   return salida;
+}
+
+/**
+ * Agrupador de mensajes.
+ *
+ * La gente no escribe un párrafo y lo manda: manda "hola", después "queria
+ * consultar algo", después la pregunta. Tres mensajes en diez segundos. Si el
+ * bot contesta cada uno por separado, salen tres respuestas encimadas y no hay
+ * nada que delate más rápido que del otro lado hay una máquina — ninguna
+ * persona lee y responde tres veces en diez segundos.
+ *
+ * Así que cada mensaje entrante reinicia un temporizador. Cuando la persona
+ * deja de escribir por unos segundos, recién ahí sale una sola respuesta con
+ * todo lo que dijo. Es el mismo comportamiento de alguien que mira el teléfono,
+ * lee las tres líneas y contesta una vez.
+ *
+ * Lo que se pierde: si el servidor se reinicia con mensajes en cola, esos
+ * mensajes no se contestan. Son unos pocos segundos de ventana y el mensaje del
+ * cliente quedó guardado igual en la bandeja, así que el costo es que alguien
+ * tenga que contestar a mano un chat. Aceptable frente a lo que se gana.
+ */
+const enCola = new Map();
+
+/**
+ * Enciende el "escribiendo…" en el teléfono del cliente. No se espera el
+ * resultado: es decoración, y si falla no puede demorar la respuesta real.
+ */
+function mostrarEscribiendo(channel, message) {
+  const metaId = message?.meta_message_id;
+  if (!metaId) return;
+
+  (async () => {
+    try {
+      const canal = await channelRepository.findById(channel.id);
+      if (!canal?.accessToken) return;
+      await graphApiService.marcarLeidoYEscribiendo({
+        channel: canal,
+        accessToken: canal.accessToken,
+        metaMessageId: metaId
+      });
+    } catch (err) {
+      console.warn('⚠️ [ESCRIBIENDO] No se pudo mostrar el indicador:', err.message);
+    }
+  })();
+}
+
+function programarDespacho(clave, grupo) {
+  grupo.timer = setTimeout(() => {
+    enCola.delete(clave);
+    automationService.despachar(grupo).catch(err => {
+      console.error('❌ [AUTOMATION] Falló el despacho agrupado:', err.message);
+    });
+  }, config.automation?.debounceMs ?? 8000);
+
+  // Que un temporizador pendiente no impida que el proceso termine.
+  if (typeof grupo.timer.unref === 'function') grupo.timer.unref();
+}
+
+function encolar({ conversation, contact, channel, message }) {
+  const clave = conversation.id;
+  const grupo = enCola.get(clave) || { mensajes: [], timer: null };
+
+  // Siempre se guarda la versión más reciente: el nombre del contacto o el
+  // estado del bot pueden haber cambiado entre una línea y la siguiente.
+  grupo.conversation = conversation;
+  grupo.contact = contact;
+  grupo.channel = channel;
+  grupo.mensajes.push(message);
+
+  if (grupo.timer) clearTimeout(grupo.timer);
+
+  // Una imagen no se hace esperar. Quien manda un comprobante quiere una
+  // respuesta ya, y además no hay razón para pensar que va a seguir escribiendo.
+  const esTexto = (message.content_type || 'text') === 'text';
+  if (!esTexto) {
+    enCola.delete(clave);
+    automationService.despachar(grupo).catch(err => {
+      console.error('❌ [AUTOMATION] Falló el despacho inmediato:', err.message);
+    });
+    return { ok: true, motivo: null, detalle: null, avisar: false, mensaje: null, en: ahora() };
+  }
+
+  // Mientras se junta lo que sigue escribiendo, del otro lado se ve el mensaje
+  // como leído y los tres puntitos. Sin esto la espera se siente como un chat
+  // abandonado; con esto, como alguien redactando.
+  mostrarEscribiendo(channel, message);
+
+  programarDespacho(clave, grupo);
+  enCola.set(clave, grupo);
+
+  return {
+    ok: true,
+    motivo: 'en_cola',
+    detalle: `${grupo.mensajes.length} línea(s) en espera`,
+    avisar: false,
+    mensaje: null,
+    en: ahora()
+  };
 }
 
 export const automationService = {
@@ -182,6 +344,14 @@ export const automationService = {
    * }} params
    * @returns {Promise<{ok: boolean, motivo: string|null, detalle: string|null, avisar: boolean, mensaje: string|null, en: string}>}
    */
+  /**
+   * Recibe un mensaje entrante y lo pone en cola en vez de contestarlo al toque.
+   *
+   * Ver el comentario del agrupador, más arriba. Lo importante acá: esta función
+   * ya no manda nada, solo decide si corresponde y encola. El envío real ocurre
+   * unos segundos después, en `despachar`, con todo lo que la persona haya
+   * escrito mientras tanto junto.
+   */
   async reenviarMensajeEntrante({ conversation, contact, channel, message }) {
     if (!config.automation?.enabled) {
       return resultado({ ok: false, motivo: MOTIVOS.APAGADA, conversationId: conversation?.id ?? null });
@@ -207,6 +377,29 @@ export const automationService = {
       return resultado({ ok: false, motivo: MOTIVOS.BOT_PAUSADO, detalle: conversation.bot_status, conversationId: conversation.id });
     }
 
+    return encolar({ conversation, contact, channel, message });
+  },
+
+  /**
+   * Manda a n8n todo lo que se juntó de una conversación, como un solo mensaje.
+   *
+   * No se llama desde afuera: la dispara el temporizador del agrupador.
+   */
+  async despachar(grupo) {
+    const { conversation, contact, channel, mensajes } = grupo;
+
+    // El último mensaje manda para el tipo: si alguien escribe "ya pagué" y
+    // después manda la captura, lo que importa es la captura.
+    const ultimo = mensajes[mensajes.length - 1];
+
+    // El texto va todo junto, en el orden en que lo escribieron. Para n8n es
+    // un solo mensaje de varias líneas, que es exactamente como lo lee una
+    // persona que mira la pantalla después de un rato.
+    const textoJunto = mensajes
+      .map(m => (m.text || '').trim())
+      .filter(Boolean)
+      .join('\n');
+
     const payload = {
       conversation_id: conversation.id,
       channel_id: channel.id,
@@ -217,13 +410,43 @@ export const automationService = {
         phone: contact.platform_user_id || contact.phone_or_username || null
       },
       message: {
-        id: message.id,
-        type: message.content_type || 'text',
-        text: message.text || '',
-        media_url: message.media_url || null,
-        meta_media_id: message.meta_media_id || null
+        id: ultimo.id,
+        type: ultimo.content_type || 'text',
+        text: textoJunto,
+        media_url: ultimo.media_url || null,
+        meta_media_id: ultimo.meta_media_id || null
       },
+
+      // Cuántas líneas mandó de corrido. Sirve para saber, mirando una
+      // ejecución, si el agrupador está haciendo su trabajo.
+      lineas_agrupadas: mensajes.length,
+
       bot_status: conversation.bot_status,
+
+      // Cuánto hace que esta persona no escribía, en minutos.
+      //
+      // Sirve para una sola cosa, pero importante: saber si corresponde
+      // saludar. Un bot que dice "hola de nuevo" treinta segundos después del
+      // último mensaje suena a máquina, y es de las cosas que más rápido
+      // delatan que del otro lado no hay nadie.
+      //
+      // El valor que se lee acá es el ANTERIOR a este mensaje: la conversación
+      // se cargó antes de que `touchCustomerInteraction` sellara la nueva
+      // marca, así que mide la pausa real entre mensajes. En el primer mensaje
+      // de una conversación viene null.
+      minutos_desde_ultimo_mensaje: minutosDesde(conversation.last_customer_interaction),
+
+      // Es la primera vez que esta persona escribe. Solo acá corresponde
+      // presentarse; repetir "soy el asistente de Lecturas de Tarde" cada
+      // mañana es de las cosas que más cansan de un bot.
+      primer_contacto: !conversation.last_customer_interaction,
+
+      // El mensaje anterior fue otro día del calendario paraguayo.
+      dia_distinto: esOtroDia(conversation.last_customer_interaction),
+
+      // "Buen día", "Buenas tardes" o "Buenas noches" según la hora en Paraguay.
+      saludo_hora: saludoSegunHora(new Date()),
+
       enviado_en: ahora()
     };
 

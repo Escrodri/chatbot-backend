@@ -164,6 +164,12 @@ export const envConfig = Object.freeze({
     webhookUrl: (process.env.N8N_WEBHOOK_URL || '').trim(),
     serviceToken: (process.env.N8N_SERVICE_TOKEN || '').trim(),
     timeoutMs: parseInt(process.env.N8N_TIMEOUT_MS || '8000', 10),
+
+    // Cuánto se espera antes de contestar, juntando mientras tanto lo que la
+    // persona siga escribiendo. Casi nadie manda una sola línea: escriben
+    // "hola", después "queria consultar", después la pregunta. Contestar cada
+    // línea por separado es la marca más evidente de que hay una máquina.
+    debounceMs: parseInt(process.env.AUTOMATION_DEBOUNCE_MS || '8000', 10),
   },
 
   // Almacenamiento externo de archivos (opcional).

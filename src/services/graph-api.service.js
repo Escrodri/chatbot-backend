@@ -408,6 +408,58 @@ export const graphApiService = {
    * Helper privado para peticiones HTTP a Meta con captura de errores de Graph API y revocación de tokens.
    * @private
    */
+  /**
+   * Marca el mensaje como leído y muestra "escribiendo…" del lado del cliente.
+   *
+   * Es lo que más hace que la espera se sienta humana: el silencio de unos
+   * segundos con los tres puntitos es alguien redactando; el mismo silencio sin
+   * nada es un chat abandonado.
+   *
+   * Solo WhatsApp. El indicador se cae solo a los 25 segundos o apenas sale una
+   * respuesta, lo que pase primero, así que la ventana de espera del agrupador
+   * tiene que quedar cómodamente por debajo de eso.
+   *
+   * Nunca lanza: si esto falla, no pasa nada importante y el mensaje se
+   * contesta igual.
+   *
+   * @param {{channel: object, accessToken: string, metaMessageId: string}} params
+   * @returns {Promise<boolean>}
+   */
+  async marcarLeidoYEscribiendo({ channel, accessToken, metaMessageId }) {
+    if (!metaMessageId || !accessToken || !channel?.channel_identifier) return false;
+    if (channel.platform && channel.platform !== 'whatsapp') return false;
+
+    const apiVersion = config.meta.apiVersion || 'v26.0';
+    const url = `${META_API_BASE}/${apiVersion}/${channel.channel_identifier}/messages`;
+
+    try {
+      const respuesta = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          status: 'read',
+          message_id: metaMessageId,
+          typing_indicator: { type: 'text' }
+        })
+      });
+
+      if (!respuesta.ok) {
+        const cuerpo = await respuesta.text().catch(() => '');
+        console.warn(`⚠️ [ESCRIBIENDO] Meta rechazó el indicador (${respuesta.status}): ${cuerpo.slice(0, 200)}`);
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      console.warn('⚠️ [ESCRIBIENDO] No se pudo mostrar el indicador:', err.message);
+      return false;
+    }
+  },
+
   async _postToMeta(url, accessToken, payload, channel, extractIdFn) {
     try {
       const response = await fetch(url, {
