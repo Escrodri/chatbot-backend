@@ -111,7 +111,18 @@ export async function initDatabase() {
       // mismo caso que el que preguntó el precio y nunca volvió.
       "ALTER TABLE orders ADD COLUMN IF NOT EXISTS etapa VARCHAR(30) NOT NULL DEFAULT 'entro'",
       'ALTER TABLE orders ADD COLUMN IF NOT EXISTS etapa_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP',
-      'CREATE INDEX IF NOT EXISTS idx_orders_etapa ON orders (etapa, etapa_at)'
+      'CREATE INDEX IF NOT EXISTS idx_orders_etapa ON orders (etapa, etapa_at)',
+
+      // La versión corta del producto, la que entra en la tarjeta de WhatsApp.
+      //
+      // La descripción larga sirve para la web y para que una persona entienda
+      // qué está comprando. En la tarjeta con botones arruina la venta: WhatsApp
+      // la corta con un "Leer más" y lo que queda abajo del corte —el precio y
+      // los botones— es justo lo único que importa. En un celular, con la
+      // descripción larga ni siquiera se llega a ver la portada.
+      //
+      // Dos textos porque son dos trabajos distintos, no porque uno esté mal.
+      'ALTER TABLE products ADD COLUMN IF NOT EXISTS resumen TEXT'
     ];
 
     for (const sql of columnMigrations) {

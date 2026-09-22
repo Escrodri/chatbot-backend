@@ -86,6 +86,12 @@ export const productController = {
         slug: p.slug,
         name: p.name,
         description: p.description,
+
+        // La versión corta para la tarjeta de WhatsApp. Si está vacía se cae a
+        // la descripción larga recortada, que es peor pero no deja el mensaje
+        // sin contenido mientras nadie escribió el resumen todavía.
+        resumen: (p.resumen && p.resumen.trim()) || String(p.description || '').slice(0, 220),
+
         price: Number(p.price),
         price_formatted: formatearMonto(p.price, p.currency),
         currency: p.currency,
@@ -200,7 +206,7 @@ export const productController = {
    */
   async create(req, res) {
     try {
-      const { slug, name, description, price, currency, delivery_url,
+      const { slug, name, description, resumen, price, currency, delivery_url,
               delivery_note, cover_url, is_active, sort_order,
               precio_recuperacion, preview_urls } = req.body || {};
 
@@ -222,6 +228,7 @@ export const productController = {
         slug: String(slug).trim(),
         name: String(name).trim(),
         description: description || '',
+        resumen: resumen || null,
         price: monto,
         currency: currency || 'PYG',
         deliveryUrl: delivery_url || null,
@@ -259,6 +266,7 @@ export const productController = {
       if (b.slug !== undefined) cambios.slug = String(b.slug).trim();
       if (b.name !== undefined) cambios.name = String(b.name).trim();
       if (b.description !== undefined) cambios.description = b.description;
+      if (b.resumen !== undefined) cambios.resumen = b.resumen || null;
       if (b.currency !== undefined) cambios.currency = b.currency;
       if (b.delivery_url !== undefined) cambios.deliveryUrl = b.delivery_url;
       if (b.delivery_note !== undefined) cambios.deliveryNote = b.delivery_note;

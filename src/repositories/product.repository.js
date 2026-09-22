@@ -32,7 +32,7 @@ export const productRepository = {
     const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
 
     const { rows } = await query(
-      `SELECT id, team_id, slug, name, description, price, currency,
+      `SELECT id, team_id, slug, name, description, resumen, price, currency,
               precio_recuperacion, preview_urls,
               delivery_url, delivery_note, cover_url, is_active, sort_order,
               created_at, updated_at
@@ -60,6 +60,7 @@ export const productRepository = {
     slug,
     name,
     description = '',
+    resumen = null,
     price,
     currency = 'PYG',
     deliveryUrl = null,
@@ -72,12 +73,12 @@ export const productRepository = {
   }) {
     const { rows } = await query(
       `INSERT INTO products
-         (team_id, slug, name, description, price, currency,
+         (team_id, slug, name, description, resumen, price, currency,
           delivery_url, delivery_note, cover_url, is_active, sort_order,
           precio_recuperacion, preview_urls)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING *`,
-      [teamId, slug, name, description, price, currency,
+      [teamId, slug, name, description, resumen, price, currency,
        deliveryUrl, deliveryNote, coverUrl, isActive, sortOrder,
        precioRecuperacion, previewUrls]
     );
@@ -93,6 +94,7 @@ export const productRepository = {
       slug: 'slug',
       name: 'name',
       description: 'description',
+      resumen: 'resumen',
       price: 'price',
       currency: 'currency',
       deliveryUrl: 'delivery_url',
