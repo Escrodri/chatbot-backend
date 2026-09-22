@@ -147,7 +147,7 @@ export const conversationRepository = {
    * @returns {Promise<Array>}
    */
   async listWithFilters({ teamId = null, platform = null, channelId = null, search = null, assignedChannelIds = null, limit = 50, offset = 0 } = {}) {
-    const conditions = ['ch.deleted_at IS NULL'];
+    const conditions = [];
     const params = [];
     let pIdx = 1;
 
@@ -165,8 +165,9 @@ export const conversationRepository = {
     }
 
     if (platform) {
-      conditions.push(`ch.platform = $${pIdx++}`);
+      conditions.push(`(ch.platform = $${pIdx} OR ct.platform = $${pIdx})`);
       params.push(platform);
+      pIdx++;
     }
 
     if (channelId) {
@@ -191,7 +192,10 @@ export const conversationRepository = {
         c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id,
         c.source_ad_id,
         ct.name as contact_name, ct.phone_or_username as contact_phone, ct.avatar_url as contact_avatar,
-        ch.platform, ch.name as channel_name, ch.color_tag as channel_color, ch.channel_identifier,
+        COALESCE(ch.platform, ct.platform) as platform, 
+        COALESCE(ch.name, 'Canal Desconectado') as channel_name, 
+        COALESCE(ch.color_tag, '#1877F2') as channel_color, 
+        ch.channel_identifier,
         o.status as order_status, o.id as order_id, o.amount as order_amount, o.currency as order_currency,
         p.name as order_product_name,
         -- Si el producto tiene enlace de entrega cargado. Sin esto la bandeja
@@ -203,7 +207,7 @@ export const conversationRepository = {
         COALESCE(tg.tags, '[]'::json) as tags
       FROM conversations c
       INNER JOIN contacts ct ON c.contact_id = ct.id
-      INNER JOIN channels ch ON c.channel_id = ch.id
+      LEFT JOIN channels ch ON c.channel_id = ch.id
       -- Estado de venta de la conversacion, para etiquetarla en la bandeja.
       -- LATERAL trae solo el pedido mas reciente de cada chat en la MISMA
       -- consulta: sin esto harian falta N consultas extra, una por conversacion.

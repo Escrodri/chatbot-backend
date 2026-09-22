@@ -269,20 +269,50 @@ export const settingsController = {
       await channelRepository.updateStatus(id, 'active', null);
 
       // Si es Facebook, asegurar suscripción de webhook con soporte para standby
+      let webhookWarning = null;
       if (channel.platform === 'facebook') {
         try {
-          await fetch(
+          const subRes = await fetch(
             `https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_deliveries,message_reads,standby&access_token=${channel.access_token}`,
             { method: 'POST' }
           );
+          const subData = await subRes.json();
+          if (!subData.success) {
+            console.warn(`[TEST CHANNEL WARNING] Meta rechazó suscripción de webhook para #${channel.channel_identifier}:`, subData);
+            webhookWarning = subData.error?.message || 'Meta no confirmó la suscripción de webhook de la página.';
+          } else {
+            console.log(`[TEST CHANNEL] Suscripción a webhooks confirmada para #${channel.channel_identifier}`);
+          }
         } catch (subErr) {
-          console.warn('Advertencia al suscribir página en test:', subErr.message);
+          webhookWarning = 'Fallo de red al suscribir webhook: ' + subErr.message;
         }
+      }
+
+      // Verificar si hay App Secret para validar la firma de mensajes entrantes
+      let hasAppSecret = false;
+      try {
+        const teamMeta = await teamRepository.getMetaConfig(channel.team_id || 1);
+        hasAppSecret = Boolean(
+          channel.app_secret ||
+          channel.appSecret ||
+          teamMeta?.appSecret ||
+          envConfig.meta.facebookAppSecret ||
+          envConfig.meta.appSecret ||
+          process.env.META_IGNORE_SIGNATURE === 'true'
+        );
+      } catch {}
+
+      let diagnosticWarning = null;
+      if (!hasAppSecret) {
+        diagnosticWarning = '⚠️ Token de página válido, pero NO hay Clave Secreta (App Secret) configurada. Meta exige validar la firma criptográfica de cada mensaje entrante; sin el App Secret en los ajustes del canal o en tu .env (META_FACEBOOK_APP_SECRET), los mensajes de Facebook no podrán entrar al chat.';
+      } else if (webhookWarning) {
+        diagnosticWarning = `⚠️ Token válido, pero Meta reportó advertencia en webhook: ${webhookWarning}`;
       }
 
       return res.json({
         success: true,
-        message: 'Conexión con Meta validada exitosamente',
+        message: diagnosticWarning || 'Conexión con Meta validada exitosamente',
+        warning: diagnosticWarning,
         data: metaData
       });
     } catch (error) {

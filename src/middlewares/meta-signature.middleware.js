@@ -1,6 +1,7 @@
-import { verifyHmacSha256 } from '../utils/index.js';
+import { verifyHmacSha256, decryptSecret } from '../utils/index.js';
 import { config } from '../config/index.js';
 import { channelRepository } from '../repositories/index.js';
+import { query } from '../database/index.js';
 
 /**
  * Middleware de ciberseguridad AppSec:
@@ -11,6 +12,11 @@ import { channelRepository } from '../repositories/index.js';
  * contra el app_secret específico del canal registrado en la base de datos si existe.
  */
 export async function verifyMetaSignature(req, res, next) {
+  if (process.env.META_IGNORE_SIGNATURE === 'true') {
+    console.warn('⚠️ [META SIGNATURE] Validación de firma HMAC omitida por META_IGNORE_SIGNATURE=true.');
+    return next();
+  }
+
   const signatureHeader = req.headers['x-hub-signature-256'];
 
   if (!signatureHeader) {
@@ -117,6 +123,29 @@ export async function verifyMetaSignature(req, res, next) {
           console.log('✅ [META SIGNATURE] Firma validada exitosamente con el App Secret de un canal registrado en BD.');
           break;
         }
+      }
+    } catch {
+      // Ignorar
+    }
+  }
+
+  // 3b. Fallback a nivel de equipo: probar contra los App Secrets guardados en la tabla 'teams'
+  if (!isValid) {
+    try {
+      const { rows: teamRows } = await query(
+        `SELECT meta_app_secret_encrypted, token_iv, token_tag FROM teams WHERE meta_app_secret_encrypted IS NOT NULL`
+      );
+      for (const row of teamRows) {
+        try {
+          if (row.meta_app_secret_encrypted && row.token_iv && row.token_tag) {
+            const teamSecret = decryptSecret(row.meta_app_secret_encrypted, row.token_iv, row.token_tag);
+            if (teamSecret && verifyHmacSha256(req.rawBody, signatureHeader, teamSecret)) {
+              isValid = true;
+              console.log('✅ [META SIGNATURE] Firma validada exitosamente con el App Secret del equipo en BD.');
+              break;
+            }
+          }
+        } catch {}
       }
     } catch {
       // Ignorar
