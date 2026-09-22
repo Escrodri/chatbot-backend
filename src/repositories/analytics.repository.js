@@ -17,8 +17,9 @@ export const analyticsRepository = {
 
     if (teamId) {
       params.push(teamId);
-      teamFilterOrders = `AND (c.team_id = $${params.length} OR p.team_id = $${params.length})`;
-      teamFilterConvs = `AND c.team_id = $${params.length}`;
+      // El equipo se obtiene a través del canal (channels.team_id) o del producto (products.team_id)
+      teamFilterOrders = `AND (ch.team_id = $${params.length} OR p.team_id = $${params.length})`;
+      teamFilterConvs = `AND ch.team_id = $${params.length}`;
     }
 
     // 1. Ventas de hoy: pedidos pagados o entregados confirmados hoy
@@ -28,6 +29,7 @@ export const analyticsRepository = {
         COUNT(o.id)::int AS cantidad_ventas_hoy
       FROM orders o
       LEFT JOIN conversations c ON o.conversation_id = c.id
+      LEFT JOIN channels ch ON c.channel_id = ch.id
       LEFT JOIN products p ON o.product_id = p.id
       WHERE o.status IN ('pagado', 'entregado')
         AND (COALESCE(o.confirmed_at, o.updated_at) AT TIME ZONE $1)::date = (CURRENT_TIMESTAMP AT TIME ZONE $1)::date
@@ -40,6 +42,7 @@ export const analyticsRepository = {
         COUNT(o.id)::int AS leads_nuevos_hoy
       FROM orders o
       LEFT JOIN conversations c ON o.conversation_id = c.id
+      LEFT JOIN channels ch ON c.channel_id = ch.id
       LEFT JOIN products p ON o.product_id = p.id
       WHERE (o.created_at AT TIME ZONE $1)::date = (CURRENT_TIMESTAMP AT TIME ZONE $1)::date
         ${teamFilterOrders}
@@ -50,6 +53,7 @@ export const analyticsRepository = {
       SELECT 
         COUNT(c.id)::int AS conversaciones_hoy
       FROM conversations c
+      LEFT JOIN channels ch ON c.channel_id = ch.id
       WHERE (COALESCE(c.last_customer_interaction, c.last_message_time, c.created_at) AT TIME ZONE $1)::date = (CURRENT_TIMESTAMP AT TIME ZONE $1)::date
         ${teamFilterConvs}
     `;
@@ -57,7 +61,7 @@ export const analyticsRepository = {
     const [resVentas, resLeads, resConvs] = await Promise.all([
       query(sqlVentasHoy, params),
       query(sqlLeadsHoy, params),
-      query(sqlConvsHoy, teamId ? [timezone, teamId] : [timezone])
+      query(sqlConvsHoy, params)
     ]);
 
     const ventas = resVentas.rows[0] || { monto_hoy: 0, cantidad_ventas_hoy: 0 };
@@ -103,7 +107,7 @@ export const analyticsRepository = {
 
     if (teamId) {
       params.push(teamId);
-      teamFilter = ` AND (p.team_id = $${params.length} OR p.team_id IS NULL)`;
+      teamFilter = ` AND (p.team_id = $${params.length} OR ch.team_id = $${params.length} OR p.team_id IS NULL)`;
     }
 
     const sql = `
@@ -121,6 +125,8 @@ export const analyticsRepository = {
         COUNT(o.id) FILTER (WHERE o.status = 'rechazado')::int AS rechazados
       FROM orders o
       LEFT JOIN products p ON o.product_id = p.id
+      LEFT JOIN conversations c ON o.conversation_id = c.id
+      LEFT JOIN channels ch ON c.channel_id = ch.id
       WHERE 1=1
         ${dateFilter}
         ${teamFilter}
@@ -222,11 +228,13 @@ export const analyticsRepository = {
     const { rows } = await query(sql, params);
 
     const sqlSinAsignar = `
-      SELECT COUNT(id)::int AS sin_asignar
+      SELECT COUNT(c.id)::int AS sin_asignar
       FROM conversations c
-      WHERE assigned_user_id IS NULL ${dateFilterConv}
+      LEFT JOIN channels ch ON c.channel_id = ch.id
+      WHERE c.assigned_user_id IS NULL ${dateFilterConv}
+      ${teamId ? `AND ch.team_id = $${params.length}` : ''}
     `;
-    const resSinAsignar = await query(sqlSinAsignar, params.slice(0, desde || hasta ? (desde && hasta ? 3 : 2) : 1));
+    const resSinAsignar = await query(sqlSinAsignar, params);
 
     return {
       asesores: rows.map(r => ({
@@ -304,13 +312,13 @@ export const analyticsRepository = {
 
     if (teamId) {
       params.push(teamId);
-      teamFilter = ` AND c.team_id = $3`;
+      teamFilter = ` AND (ch.team_id = $3 OR p.team_id = $3)`;
     }
 
     const sql = `
       WITH dias_serie AS (
         SELECT (CURRENT_TIMESTAMP AT TIME ZONE $1)::date - i AS dia
-        FROM generate_series(0, $2 - 1) AS i
+        FROM generate_series(0, $2::int - 1) AS i
       ),
       ventas_por_dia AS (
         SELECT 
@@ -319,8 +327,10 @@ export const analyticsRepository = {
           COALESCE(SUM(o.amount), 0)::numeric AS ingresos
         FROM orders o
         LEFT JOIN conversations c ON o.conversation_id = c.id
+        LEFT JOIN channels ch ON c.channel_id = ch.id
+        LEFT JOIN products p ON o.product_id = p.id
         WHERE o.status IN ('pagado', 'entregado')
-          AND (COALESCE(o.confirmed_at, o.updated_at) AT TIME ZONE $1)::date >= (CURRENT_TIMESTAMP AT TIME ZONE $1)::date - ($2 - 1)
+          AND (COALESCE(o.confirmed_at, o.updated_at) AT TIME ZONE $1)::date >= (CURRENT_TIMESTAMP AT TIME ZONE $1)::date - ($2::int - 1)
           ${teamFilter}
         GROUP BY 1
       ),
@@ -330,7 +340,9 @@ export const analyticsRepository = {
           COUNT(o.id)::int AS leads
         FROM orders o
         LEFT JOIN conversations c ON o.conversation_id = c.id
-        WHERE (o.created_at AT TIME ZONE $1)::date >= (CURRENT_TIMESTAMP AT TIME ZONE $1)::date - ($2 - 1)
+        LEFT JOIN channels ch ON c.channel_id = ch.id
+        LEFT JOIN products p ON o.product_id = p.id
+        WHERE (o.created_at AT TIME ZONE $1)::date >= (CURRENT_TIMESTAMP AT TIME ZONE $1)::date - ($2::int - 1)
           ${teamFilter}
         GROUP BY 1
       )
