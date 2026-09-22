@@ -44,7 +44,20 @@ export async function initDatabase() {
       // que decide cuándo dejar de insistir con el guion y llamar a la IA: si
       // después de varios mensajes la persona sigue en "interesado", el guion
       // claramente no está entendiendo lo que pregunta.
-      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS bot_intentos INTEGER NOT NULL DEFAULT 0'
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS bot_intentos INTEGER NOT NULL DEFAULT 0',
+
+      // Desde cuándo este chat está en manos de una persona.
+      //
+      // Sin esta fecha, pasarle el chat a un asesor era para siempre: el bot se
+      // callaba y no volvía a hablar nunca más, aunque del otro lado alguien
+      // escribiera al otro día a las tres de la mañana y no hubiera nadie para
+      // contestarle. Con la hora anotada se puede decidir que después de un
+      // rato largo sin que nadie del equipo conteste, el bot retome el chat en
+      // vez de dejarlo mudo.
+      //
+      // Se pisa cada vez que una persona escribe, así que mide lo que hay que
+      // medir: hace cuánto que este chat no recibe atención humana.
+      'ALTER TABLE conversations ADD COLUMN IF NOT EXISTS handed_over_at TIMESTAMPTZ'
     ];
 
     for (const sql of columnMigrations) {

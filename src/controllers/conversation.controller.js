@@ -281,6 +281,19 @@ export const conversationController = {
       //    con su primera respuesta y no volvería a contestar nunca.
       if (!esBot) {
         await conversationRepository.updateBotStatus(conv.id, 'handed_over', req.user.id);
+
+        // Y se tira la respuesta que el bot tuviera a medio cocinar. Marcar el
+        // handover no alcanza: el temporizador del agrupador ya está corriendo
+        // con una copia vieja de la conversación, donde el bot todavía manda.
+        // Si no se corta acá, el asesor contesta y ocho segundos después el bot
+        // contesta otra cosa encima, al mismo cliente y sobre el mismo tema.
+        const enEspera = automationService.cancelarCola(conv.id);
+        if (enEspera > 0) {
+          console.info(
+            `🤖 [HANDOVER] Conversación #${conv.id}: se descartaron ${enEspera} mensaje(s) en cola ` +
+            'porque contestó una persona.'
+          );
+        }
       }
       await conversationRepository.updateOutboundMessage(conv.id, messageText);
 

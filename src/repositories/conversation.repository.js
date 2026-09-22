@@ -12,6 +12,23 @@ export const conversationRepository = {
    * @returns {Promise<object>}
    */
   async findOrCreateByContact(channelId, contactId) {
+    // Cuándo había escrito esta persona la vez anterior, mirado ANTES de tocar
+    // nada.
+    //
+    // El upsert de abajo pisa last_customer_interaction con la hora actual, y
+    // la columna además arranca con CURRENT_TIMESTAMP al crearse la fila. O
+    // sea: después de esta consulta, el campo dice "hace un segundo" tanto para
+    // alguien que escribe por primera vez en su vida como para alguien que
+    // viene charlando hace media hora. Son la misma cosa vistas desde ahí, y
+    // por eso el bot nunca saludaba a nadie: preguntaba si era el primer
+    // contacto justo después de haber borrado la única prueba de que no lo era.
+    const previo = await query(
+      `SELECT last_customer_interaction
+       FROM conversations
+       WHERE channel_id = $1 AND contact_id = $2`,
+      [channelId, contactId]
+    );
+
     const { rows } = await query(
       `INSERT INTO conversations (channel_id, contact_id, bot_status, unread_count)
        VALUES ($1, $2, 'active', 0)
@@ -21,7 +38,11 @@ export const conversationRepository = {
       [channelId, contactId]
     );
 
-    return rows[0];
+    return {
+      ...rows[0],
+      // null cuando la conversación no existía: es el primer mensaje de verdad.
+      interaccion_previa: previo.rows[0]?.last_customer_interaction || null
+    };
   },
 
   /**
@@ -137,11 +158,37 @@ export const conversationRepository = {
    */
   async updateBotStatus(conversationId, botStatus, assignedUserId = null) {
     await query(
-      `UPDATE conversations 
-       SET bot_status = $1, assigned_user_id = COALESCE($2, assigned_user_id)
+      `UPDATE conversations
+       SET bot_status = $1,
+           assigned_user_id = COALESCE($2, assigned_user_id),
+           -- Se pisa cada vez que el chat pasa (o vuelve a pasar) a manos de
+           -- una persona, así que no marca cuándo empezó el handover sino
+           -- cuándo fue la última señal de vida del equipo. Es lo que hay que
+           -- medir para saber si un chat quedó abandonado.
+           handed_over_at = CASE WHEN $1 = 'handed_over' THEN CURRENT_TIMESTAMP ELSE NULL END
        WHERE id = $3`,
       [botStatus, assignedUserId, conversationId]
     );
+  },
+
+  /**
+   * Estado del bot leído recién de la base, no el que traía la copia en memoria.
+   *
+   * Entre que llega un mensaje y que el bot contesta pasan unos segundos de
+   * espera. En ese hueco el asesor puede haber tomado el chat, y la copia de la
+   * conversación que quedó guardada en la cola sigue diciendo que el bot manda.
+   * El resultado es el bot contestando encima de la persona, que es justo lo
+   * que el handover existe para evitar.
+   *
+   * @param {number} conversationId
+   * @returns {Promise<{bot_status: string, handed_over_at: Date|null}|null>}
+   */
+  async estadoDelBot(conversationId) {
+    const { rows } = await query(
+      `SELECT bot_status, handed_over_at FROM conversations WHERE id = $1`,
+      [conversationId]
+    );
+    return rows[0] || null;
   },
 
   /**

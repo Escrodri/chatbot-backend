@@ -170,6 +170,18 @@ export const envConfig = Object.freeze({
     // "hola", después "queria consultar", después la pregunta. Contestar cada
     // línea por separado es la marca más evidente de que hay una máquina.
     debounceMs: parseInt(process.env.AUTOMATION_DEBOUNCE_MS || '8000', 10),
+
+    // Cuántas horas puede quedar un chat esperando a una persona antes de que
+    // el bot lo retome.
+    //
+    // Pasarle un chat a un asesor era una puerta de una sola dirección: el bot
+    // se callaba y no volvía a hablar nunca. De día está bien, porque hay
+    // alguien mirando. Pero el que escribe un domingo a la madrugada se queda
+    // sin respuesta hasta el lunes, y para entonces ya compró en otro lado.
+    //
+    // Doce horas es el número que cubre una noche entera sin pisarle el chat a
+    // nadie que esté trabajando.
+    reactivarTrasHoras: parseInt(process.env.AUTOMATION_REACTIVAR_HORAS || '12', 10),
   },
 
   // Números con los que se prueba el flujo.

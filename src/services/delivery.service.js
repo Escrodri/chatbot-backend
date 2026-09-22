@@ -181,11 +181,23 @@ export const deliveryService = {
 
       await conversationRepository.updateOutboundMessage(conv.id, texto);
 
+      // Confirmar un pago o rechazar un comprobante lo decide una persona
+      // mirando el extracto del banco, así que el chat queda en sus manos.
+      //
+      // Sin esto el bot seguía figurando como el que contesta, y el "muchas
+      // gracias" que llega después de la entrega volvía a caer en el guion de
+      // venta, que le ofrecía a alguien que acaba de comprar el material que
+      // recién le mandaron. El reloj del handover se sella acá, así que si
+      // nadie sigue la conversación, el bot la retoma solo pasadas las horas
+      // configuradas.
+      await conversationRepository.updateBotStatus(conv.id, 'handed_over', actorUserId);
+
       socketManager.emitMessageSent(conv.channel_id, guardado);
       socketManager.emitConversationUpdated(conv.channel_id, {
         id: conv.id,
         last_message_text: texto,
         last_message_time: new Date(),
+        bot_status: 'handed_over',
         order_status: estadoParaBandeja
       });
 

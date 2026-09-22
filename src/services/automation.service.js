@@ -1,5 +1,6 @@
 import { config } from '../config/index.js';
 import { channelRepository } from '../repositories/channel.repository.js';
+import { conversationRepository } from '../repositories/conversation.repository.js';
 import { graphApiService } from './graph-api.service.js';
 
 /**
@@ -222,7 +223,17 @@ function encolar({ conversation, contact, channel, message }) {
 
   // Siempre se guarda la versión más reciente: el nombre del contacto o el
   // estado del bot pueden haber cambiado entre una línea y la siguiente.
-  grupo.conversation = conversation;
+  //
+  // Menos una cosa: cuándo había escrito esta persona por última vez. Eso se
+  // toma del primer mensaje del grupo y no se vuelve a tocar, porque para
+  // cuando llega la tercera línea la respuesta correcta sería "hace ocho
+  // segundos" y el bot no saludaría nunca a alguien que arranca escribiendo
+  // "hola", enter, "buenas", enter, "consulta".
+  const previa = grupo.conversation
+    ? grupo.conversation.interaccion_previa
+    : conversation.interaccion_previa;
+
+  grupo.conversation = { ...conversation, interaccion_previa: previa ?? null };
   grupo.contact = contact;
   grupo.channel = channel;
   grupo.mensajes.push(message);
@@ -256,6 +267,65 @@ function encolar({ conversation, contact, channel, message }) {
     mensaje: null,
     en: ahora()
   };
+}
+
+/**
+ * Devuelve el chat al bot si el equipo lo dejó abandonado demasiado tiempo.
+ *
+ * Pasarle una conversación a una persona estaba bien pensado para el horario
+ * de trabajo y mal pensado para el resto del día. El que manda un comprobante
+ * a las once de la noche dispara el handover, y a partir de ahí el bot no
+ * vuelve a hablar: si a las dos de la mañana escribe "hola?, sigue ahí?", no
+ * le contesta nadie hasta que alguien abra la bandeja. Del otro lado eso no se
+ * lee como "están durmiendo", se lee como que lo estafaron.
+ *
+ * Así que el handover deja de ser definitivo y pasa a tener vencimiento: si
+ * hace más de N horas que ninguna persona del equipo escribió en ese chat, el
+ * bot lo retoma. Y lo retoma con todo lo que sabe hacer, incluida la IA, que
+ * es justo para lo que está: contestar lo que el guion no sabe.
+ *
+ * Mientras el asesor esté atendiendo, cada mensaje suyo corre el reloj de
+ * nuevo, así que esto no puede pisar una conversación activa.
+ *
+ * @param {object} conversation
+ * @returns {Promise<boolean>} true si el bot recuperó el chat
+ */
+async function reactivarSiQuedoAbandonado(conversation) {
+  // 'disabled' es una decisión explícita: alguien apagó el bot para este chat
+  // y no es asunto de un temporizador revertirla.
+  if (conversation.bot_status !== 'handed_over') return false;
+
+  const horas = config.automation?.reactivarTrasHoras ?? 12;
+  if (!horas || horas <= 0) return false;
+
+  try {
+    const estado = await conversationRepository.estadoDelBot(conversation.id);
+
+    // Ya no está en manos de una persona: alguien lo reactivó por su cuenta.
+    if (!estado || estado.bot_status !== 'handed_over') {
+      return estado?.bot_status === 'active';
+    }
+
+    // Sin fecha anotada, el handover es anterior a que existiera la columna.
+    // Se lo toma por vencido: si ese chat sigue esperando desde entonces, es
+    // exactamente el caso que esto viene a resolver.
+    const desde = estado.handed_over_at ? new Date(estado.handed_over_at).getTime() : 0;
+    const transcurridas = (Date.now() - desde) / 3_600_000;
+
+    if (transcurridas < horas) return false;
+
+    await conversationRepository.updateBotStatus(conversation.id, 'active');
+    console.info(
+      `🤖 [AUTOMATION] Conversación #${conversation.id} vuelve al bot: ` +
+      `${Math.floor(transcurridas)}h sin que nadie del equipo conteste.`
+    );
+    return true;
+  } catch (err) {
+    // Si esto falla, el chat se queda con la persona. Es el lado seguro del
+    // error: peor que un cliente esperando es el bot hablando encima de alguien.
+    console.warn('⚠️ [AUTOMATION] No se pudo revisar el handover vencido:', err.message);
+    return false;
+  }
 }
 
 export const automationService = {
@@ -392,12 +462,21 @@ export const automationService = {
     // porque el cliente escribe, el mensaje aparece en la bandeja y nadie
     // contesta, exactamente igual que si n8n estuviera muerto.
     if (conversation.bot_status !== 'active') {
-      console.info(
-        `ℹ️ [AUTOMATION] Conversación #${conversation.id} en estado "${conversation.bot_status}": ` +
-        'no se reenvía a n8n porque el chat está en manos de una persona. ' +
-        'Para que vuelva a contestar el bot, reactivalo desde la bandeja.'
-      );
-      return resultado({ ok: false, motivo: MOTIVOS.BOT_PAUSADO, detalle: conversation.bot_status, conversationId: conversation.id });
+      // Un chat en manos de una persona puede haber quedado ahí de casualidad:
+      // el asesor se fue a dormir, era domingo, nadie lo miró. Antes de callar
+      // al bot se chequea hace cuánto que nadie del equipo contesta.
+      const retomado = await reactivarSiQuedoAbandonado(conversation);
+
+      if (!retomado) {
+        console.info(
+          `ℹ️ [AUTOMATION] Conversación #${conversation.id} en estado "${conversation.bot_status}": ` +
+          'no se reenvía a n8n porque el chat está en manos de una persona. ' +
+          'Para que vuelva a contestar el bot, reactivalo desde la bandeja.'
+        );
+        return resultado({ ok: false, motivo: MOTIVOS.BOT_PAUSADO, detalle: conversation.bot_status, conversationId: conversation.id });
+      }
+
+      conversation.bot_status = 'active';
     }
 
     return encolar({ conversation, contact, channel, message });
@@ -410,6 +489,28 @@ export const automationService = {
    */
   async despachar(grupo) {
     const { conversation, contact, channel, mensajes } = grupo;
+
+    // Última verificación antes de hablar, contra la base y no contra la copia
+    // que quedó guardada al encolar.
+    //
+    // Entre que el cliente escribió y este momento pasaron unos segundos, y en
+    // esos segundos el asesor pudo haber tomado el chat: abrió la bandeja, vio
+    // el mensaje y contestó a mano. La copia de la conversación que arrastra la
+    // cola sigue diciendo que el bot manda, porque se sacó antes de todo eso.
+    // Sin este chequeo el bot manda su respuesta igual, encima de la de la
+    // persona, y el cliente recibe dos contestaciones distintas a lo mismo.
+    try {
+      const estado = await conversationRepository.estadoDelBot(conversation.id);
+      if (estado && estado.bot_status !== 'active') {
+        console.info(
+          `ℹ️ [AUTOMATION] Conversación #${conversation.id}: se cancela la respuesta automática, ` +
+          'una persona tomó el chat mientras se juntaban los mensajes.'
+        );
+        return resultado({ ok: false, motivo: MOTIVOS.BOT_PAUSADO, detalle: estado.bot_status, conversationId: conversation.id });
+      }
+    } catch (err) {
+      console.warn('⚠️ [AUTOMATION] No se pudo confirmar el estado del bot antes de despachar:', err.message);
+    }
 
     // El último mensaje manda para el tipo: si alguien escribe "ya pagué" y
     // después manda la captura, lo que importa es la captura.
@@ -453,19 +554,24 @@ export const automationService = {
       // último mensaje suena a máquina, y es de las cosas que más rápido
       // delatan que del otro lado no hay nadie.
       //
-      // El valor que se lee acá es el ANTERIOR a este mensaje: la conversación
-      // se cargó antes de que `touchCustomerInteraction` sellara la nueva
-      // marca, así que mide la pausa real entre mensajes. En el primer mensaje
-      // de una conversación viene null.
-      minutos_desde_ultimo_mensaje: minutosDesde(conversation.last_customer_interaction),
+      // Se usa `interaccion_previa` y no `last_customer_interaction`. No son lo
+      // mismo: para cuando el mensaje llega hasta acá, la segunda ya fue
+      // pisada con la hora de este mismo mensaje, así que siempre dice "hace
+      // cero minutos" y siempre da falso el primer contacto. Con ese dato el
+      // bot no saludó nunca a nadie: arrancaba todas las conversaciones del
+      // mundo con "Dale!", como si viniera contestando desde antes.
+      //
+      // `interaccion_previa` es la foto tomada antes de tocar la fila, y en el
+      // primer mensaje de una conversación viene null.
+      minutos_desde_ultimo_mensaje: minutosDesde(conversation.interaccion_previa),
 
       // Es la primera vez que esta persona escribe. Solo acá corresponde
       // presentarse; repetir "soy el asistente de Lecturas de Tarde" cada
       // mañana es de las cosas que más cansan de un bot.
-      primer_contacto: !conversation.last_customer_interaction,
+      primer_contacto: !conversation.interaccion_previa,
 
       // El mensaje anterior fue otro día del calendario paraguayo.
-      dia_distinto: esOtroDia(conversation.last_customer_interaction),
+      dia_distinto: esOtroDia(conversation.interaccion_previa),
 
       // "Buen día", "Buenas tardes" o "Buenas noches" según la hora en Paraguay.
       saludo_hora: saludoSegunHora(new Date()),
