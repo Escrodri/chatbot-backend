@@ -300,6 +300,12 @@ export const webhookService = {
         //
         // El reenvío va con await pero nunca propaga: si n8n está caído, el
         // mensaje del cliente ya quedó guardado y la bandeja lo muestra igual.
+        // Qué botón tocó, si tocó uno. No se guarda en la base porque en la
+        // bandeja alcanza con el texto del botón; esto viaja solo hasta el
+        // guion, que lo usa para rutear sin tener que adivinar a partir de
+        // cómo esté redactado el botón hoy.
+        insertedMessage.boton_id = event.message.botonId || null;
+
         if (automationService.estaActiva()) {
           try {
             const reenvio = await automationService.reenviarMensajeEntrante({

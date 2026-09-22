@@ -9,6 +9,31 @@ import { mediaService } from './media.service.js';
 const META_API_BASE = 'https://graph.facebook.com';
 
 /**
+ * Deja la lista de botones como la quiere Meta, o vacía si no sirve.
+ *
+ * Los límites no son sugerencias: con cuatro botones, o con un título de
+ * veintiún caracteres, Meta rechaza el mensaje entero y el cliente no recibe
+ * nada. Un botón cortado se lee igual; un mensaje que no llegó, no.
+ *
+ * El `id` es lo que vuelve cuando la persona toca el botón, así que es el que
+ * el guion usa para saber qué eligió. Si no se declara, se usa el título.
+ *
+ * @param {Array<{id?: string, title?: string}>|null|undefined} botones
+ * @returns {Array<{id: string, title: string}>}
+ */
+function normalizarBotones(botones) {
+  if (!Array.isArray(botones)) return [];
+
+  return botones
+    .filter(b => b && typeof b.title === 'string' && b.title.trim())
+    .slice(0, 3)
+    .map((b, i) => ({
+      id: String(b.id || b.title).trim().slice(0, 256) || `btn_${i}`,
+      title: b.title.trim().slice(0, 20)
+    }));
+}
+
+/**
  * Servicio Oficial Meta Graph API v21.0:
  * Despacha mensajes salientes hacia WhatsApp Cloud API, Facebook Messenger e Instagram Direct.
  * Implementa la etiqueta HUMAN_AGENT (ventana de 7 días) y soporte de plantillas HSM para WhatsApp fuera de 24h.
@@ -40,7 +65,8 @@ export const graphApiService = {
    *   contentType?: string,
    *   fileName?: string|null,
    *   localFilePath?: string|null,
-   *   mimeType?: string|null
+   *   mimeType?: string|null,
+   *   buttons?: Array<{id: string, title: string}>
    * }} params
    * @returns {Promise<{ metaMessageId: string }>}
    */
@@ -55,7 +81,8 @@ export const graphApiService = {
     fileName = null,
     localFilePath = null,
     mimeType = null,
-    isViewOnce = false
+    isViewOnce = false,
+    buttons = []
   }) {
     const apiVersion = config.meta.apiVersion || 'v26.0';
     const accessToken = channel.accessToken;
@@ -121,12 +148,63 @@ export const graphApiService = {
       }
     }
 
-    const effectiveText = text ? text.trim() : '';
+    let effectiveText = text ? text.trim() : '';
+
+    // Instagram y Messenger no tienen estos botones. En vez de perder las
+    // opciones, se escriben como texto al final: la persona igual sabe qué
+    // puede contestar, y el guion reconoce esas mismas palabras porque son las
+    // que ya venía leyendo antes de que existieran los botones.
+    if (channel.platform !== 'whatsapp') {
+      const comoTexto = normalizarBotones(buttons);
+      if (comoTexto.length > 0) {
+        effectiveText = `${effectiveText}\n\n${comoTexto.map(b => `• ${b.title}`).join('\n')}`.trim();
+      }
+    }
 
     // 1. WHATSAPP CLOUD API
     if (channel.platform === 'whatsapp') {
       const url = `${META_API_BASE}/${apiVersion}/${channel.channel_identifier}/messages`;
       let payload;
+
+      const botonesValidos = normalizarBotones(buttons);
+
+      if (botonesValidos.length > 0) {
+        // Mensaje con botones de respuesta rápida.
+        //
+        // Es un solo mensaje que puede llevar la portada arriba, el texto en el
+        // medio y hasta tres botones abajo. Reemplaza a la seguidilla de cuatro
+        // mensajes que hacía falta antes para lo mismo, y sobre todo reemplaza
+        // al "escribime SI" que obliga a la persona a tipear: cada paso que
+        // pide escribir algo es gente que se cae del flujo.
+        //
+        // No necesita plantilla aprobada por Meta porque es una respuesta
+        // dentro de la ventana de 24 horas. Fuera de esa ventana, Meta lo
+        // rechaza igual que a cualquier texto libre.
+        const encabezado = finalMediaUrl && contentType === 'image'
+          ? { header: { type: 'image', image: { link: resolveFullMediaUrl(finalMediaUrl) } } }
+          : {};
+
+        payload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: recipientId,
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            ...encabezado,
+            // Meta corta en 1024 caracteres y devuelve error si se pasa.
+            body: { text: (effectiveText || '').slice(0, 1024) },
+            action: {
+              buttons: botonesValidos.map(b => ({
+                type: 'reply',
+                reply: { id: b.id, title: b.title }
+              }))
+            }
+          }
+        };
+
+        return this._postToMeta(url, accessToken, payload, channel, (data) => data.messages?.[0]?.id);
+      }
 
       if (finalMediaUrl) {
         const fullMediaUrl = resolveFullMediaUrl(finalMediaUrl);
@@ -370,9 +448,7 @@ export const graphApiService = {
     try {
       let fields = '';
       if (platform === 'facebook') {
-        // En Facebook Messenger (PSID), la API oficial expone first_name,last_name,profile_pic.
-        // Consultar el campo 'name' directamente en un PSID sin 'pages_read_engagement' produce el error (#100).
-        fields = 'first_name,last_name,profile_pic';
+        fields = 'first_name,last_name,name,profile_pic';
       } else if (platform === 'instagram') {
         fields = 'name,username,profile_pic';
       } else {
@@ -390,9 +466,7 @@ export const graphApiService = {
 
       let name = null;
       if (platform === 'facebook') {
-        name = (data.first_name || data.last_name)
-          ? `${data.first_name || ''} ${data.last_name || ''}`.trim()
-          : (data.name || null);
+        name = data.name || (data.first_name ? `${data.first_name} ${data.last_name || ''}`.trim() : null);
       } else if (platform === 'instagram') {
         name = data.name || (data.username ? `@${data.username}` : null);
       }

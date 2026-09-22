@@ -16,6 +16,23 @@ function formatearMonto(valor, moneda = 'PYG') {
 }
 
 /**
+ * Parte un texto de varias líneas en una lista, sin vacíos.
+ *
+ * Las páginas de muestra se cargan pegando URLs en un cuadro de texto, que es
+ * como lo hace una persona, y se entregan partidas, que es como lo necesita el
+ * flujo. Tolera líneas en blanco y espacios de más porque siempre los hay.
+ *
+ * @param {string|null|undefined} texto
+ * @returns {string[]}
+ */
+function separarLineas(texto) {
+  return String(texto || '')
+    .split(/[\n,]+/)
+    .map(l => l.trim())
+    .filter(Boolean);
+}
+
+/**
  * Arma el texto del catálogo tal como va a salir por WhatsApp.
  *
  * Se genera acá y no en n8n a propósito: el día que cambie el formato, cambia
@@ -52,8 +69,18 @@ export const productController = {
         soloActivos: !incluirInactivos
       });
 
-      // El bot nunca debería recibir el link de entrega junto al catálogo:
-      // ese link es lo que se paga, y el catálogo se manda antes de cobrar.
+      // El bot nunca debería recibir el link de entrega junto al catálogo: ese
+      // link es lo que se paga, y el catálogo se manda antes de cobrar.
+      //
+      // Pero el panel sí lo necesita, y por no dárselo se estaba perdiendo:
+      // el formulario cargaba el campo vacío porque nunca le llegaba, y al
+      // guardar cualquier otro cambio mandaba ese vacío de vuelta y borraba el
+      // enlace. El síntoma aparecía mucho después, al confirmar un pago, con
+      // un "este producto no tiene enlace cargado" que no se parecía en nada a
+      // su causa. Se entrega solo a una persona con sesión de administrador,
+      // nunca al token de servicio que usa el bot.
+      const esAdmin = req.user?.role === 'admin' || req.user?.role === 'superadmin';
+
       const publicos = productos.map(p => ({
         id: p.id,
         slug: p.slug,
@@ -63,7 +90,28 @@ export const productController = {
         price_formatted: formatearMonto(p.price, p.currency),
         currency: p.currency,
         cover_url: p.cover_url,
-        is_active: p.is_active
+        is_active: p.is_active,
+
+        // Precio de recuperación, para insistirle a quien se quedó a mitad de
+        // camino. Va null cuando el campo está vacío, y entonces el flujo
+        // insiste al precio de siempre: es así como se apaga el descuento, sin
+        // tocar nada del guion.
+        precio_recuperacion: p.precio_recuperacion !== null && p.precio_recuperacion !== undefined
+          ? Number(p.precio_recuperacion)
+          : null,
+        precio_recuperacion_formatted: p.precio_recuperacion !== null && p.precio_recuperacion !== undefined
+          ? formatearMonto(p.precio_recuperacion, p.currency)
+          : null,
+
+        // Las páginas de muestra se guardan como texto, una URL por línea,
+        // porque así es como una persona las carga. Se entregan ya partidas
+        // para que el flujo no tenga que saber cómo están guardadas.
+        preview_urls: separarLineas(p.preview_urls),
+
+        ...(esAdmin ? {
+          delivery_url: p.delivery_url || '',
+          delivery_note: p.delivery_note || ''
+        } : {})
       }));
 
       return res.json({
@@ -153,7 +201,8 @@ export const productController = {
   async create(req, res) {
     try {
       const { slug, name, description, price, currency, delivery_url,
-              delivery_note, cover_url, is_active, sort_order } = req.body || {};
+              delivery_note, cover_url, is_active, sort_order,
+              precio_recuperacion, preview_urls } = req.body || {};
 
       if (!slug || !name) {
         return res.status(400).json({ error: 'El producto necesita al menos slug y nombre' });
@@ -179,7 +228,12 @@ export const productController = {
         deliveryNote: delivery_note || null,
         coverUrl: cover_url || null,
         isActive: is_active !== false,
-        sortOrder: Number(sort_order) || 0
+        sortOrder: Number(sort_order) || 0,
+        // Vacío, cero o algo que no es número significan "sin precio de
+        // recuperación". Guardar un cero haría que el bot ofrezca el material
+        // gratis, así que se trata igual que si no estuviera.
+        precioRecuperacion: Number(precio_recuperacion) > 0 ? Number(precio_recuperacion) : null,
+        previewUrls: separarLineas(preview_urls).join('\n') || null
       });
 
       return res.status(201).json(creado);
@@ -211,6 +265,18 @@ export const productController = {
       if (b.cover_url !== undefined) cambios.coverUrl = b.cover_url;
       if (b.is_active !== undefined) cambios.isActive = Boolean(b.is_active);
       if (b.sort_order !== undefined) cambios.sortOrder = Number(b.sort_order) || 0;
+
+      // Vaciar el campo es cómo se apaga el descuento de recuperación, así que
+      // un valor vacío tiene que poder llegar hasta la base como null.
+      if (b.precio_recuperacion !== undefined) {
+        cambios.precioRecuperacion = Number(b.precio_recuperacion) > 0
+          ? Number(b.precio_recuperacion)
+          : null;
+      }
+
+      if (b.preview_urls !== undefined) {
+        cambios.previewUrls = separarLineas(b.preview_urls).join('\n') || null;
+      }
 
       if (b.price !== undefined) {
         const monto = Number(b.price);

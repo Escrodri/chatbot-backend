@@ -1,8 +1,9 @@
-import { orderRepository } from '../repositories/order.repository.js';
+import { orderRepository, ETAPAS, posicionEtapa } from '../repositories/order.repository.js';
 import { productRepository } from '../repositories/product.repository.js';
 import { conversationRepository } from '../repositories/conversation.repository.js';
 import { deliveryService } from '../services/delivery.service.js';
 import { socketManager } from '../sockets/index.js';
+import { envConfig, esHorarioNocturno, horaEnParaguay } from '../config/env.config.js';
 
 export const orderController = {
   /**
@@ -213,6 +214,218 @@ export const orderController = {
       return res.json({ ...estadoFinal, entrega });
     } catch (error) {
       return res.status(500).json({ error: 'Error al actualizar el pedido: ' + error.message });
+    }
+  },
+
+  /**
+   * Anota hasta dónde llegó esta persona en el recorrido de compra.
+   *
+   * Lo llama el guion en cada paso: cuando le presentó el producto, cuando
+   * pidió ver muestras, cuando dijo que quería comprar, cuando recibió los
+   * datos de la transferencia. Cada llamada es barata y el registro que deja
+   * es lo que después permite comparar anuncios por ventas y no por
+   * conversaciones abiertas.
+   *
+   * Nunca retrocede: pedirle que marque una etapa anterior a la que ya tiene
+   * no es un error, simplemente no hace nada.
+   *
+   * POST /api/orders/:id/etapa
+   */
+  async marcarEtapa(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+
+      const { etapa } = req.body || {};
+      if (posicionEtapa(etapa) < 0) {
+        return res.status(400).json({ error: `Etapa inválida. Debe ser una de: ${ETAPAS.join(', ')}` });
+      }
+
+      const movido = await orderRepository.marcarEtapa(id, etapa);
+
+      // Sin cambio significa que ya venía igual o más adelante. Es el caso
+      // normal cuando alguien repite un paso, así que se contesta con éxito.
+      return res.json({
+        ok: true,
+        avanzo: Boolean(movido),
+        etapa: movido ? movido.etapa : null
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al marcar la etapa: ' + error.message });
+    }
+  },
+
+  /**
+   * El embudo: cuánta gente llegó a cada paso, en total y por anuncio.
+   *
+   * GET /api/orders/embudo?dias=30
+   */
+  async embudo(req, res) {
+    try {
+      const dias = Math.min(parseInt(req.query.dias, 10) || 30, 365);
+      const desde = new Date(Date.now() - dias * 24 * 60 * 60 * 1000);
+
+      const datos = await orderRepository.embudo({ desde });
+
+      return res.json({ dias, desde, ...datos });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al armar el embudo: ' + error.message });
+    }
+  },
+
+  /**
+   * Decide si un comprobante se puede aprobar y entregar sin que lo mire nadie.
+   *
+   * Existe por una sola razón: de madrugada no hay nadie revisando, y alguien
+   * que transfirió a las dos de la mañana no espera tranquilo hasta las nueve.
+   * A esa altura ya escribió tres veces preguntando si lo estafaron, y esa
+   * conversación no se recupera aunque después llegue el material.
+   *
+   * La decisión vive acá y no en el guion a propósito. n8n puede mandar
+   * cualquier cosa en el cuerpo de la petición, así que todo lo que importa se
+   * vuelve a verificar contra la base: el precio sale del producto, el número
+   * de cuenta de la configuración, y el número de operación se contrasta
+   * contra los pedidos ya cobrados. Un flujo mal armado no debería poder
+   * regalar el material.
+   *
+   * Solo entrega sola cuando no queda ninguna duda. Cualquier ambigüedad —una
+   * foto borrosa, un monto que no se leyó, una cuenta a medias— cae en la
+   * revisión humana de siempre. Rechazarle el pago a alguien que pagó de
+   * verdad es mucho peor que hacerlo esperar.
+   *
+   * POST /api/orders/:id/revision-automatica
+   */
+  async revisionAutomatica(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+
+      const { monto = null, cuenta = null, operacion = null, receipt_message_id = null } = req.body || {};
+
+      const pedido = await orderRepository.findConEntrega(id);
+      if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+
+      // Guarda siempre el número de operación, aunque después no se entregue
+      // solo. Si no se guarda acá, el comprobante que revisa una persona a la
+      // mañana queda sin número registrado y esa misma captura sirve de nuevo
+      // la noche siguiente.
+      const operacionLimpia = String(operacion || '').replace(/[^0-9]/g, '');
+      if (operacionLimpia) {
+        await orderRepository.cambiarEstado(id, pedido.status, { receiptOperacion: operacionLimpia });
+      }
+
+      const rechazar = (motivo, detalle) => res.json({
+        entregado: false,
+        motivo,
+        detalle,
+        hora_paraguay: horaEnParaguay()
+      });
+
+      if (!envConfig.entregaAutomatica.habilitada) {
+        return rechazar('desactivada', 'La entrega automática está apagada.');
+      }
+
+      if (!esHorarioNocturno()) {
+        return rechazar('horario_humano', 'Es horario de atención: lo revisa una persona.');
+      }
+
+      if (['pagado', 'entregado'].includes(pedido.status)) {
+        return rechazar('ya_estaba_pago', 'Este pedido ya figura cobrado.');
+      }
+
+      if (!pedido.delivery_url || !pedido.delivery_url.trim()) {
+        return rechazar('sin_enlace', 'El producto no tiene enlace de entrega cargado.');
+      }
+
+      // El precio sale del producto, no de lo que mandó el guion.
+      const precio = Number(pedido.price ?? pedido.amount ?? 0);
+      const montoLeido = Number(String(monto || '').replace(/[^0-9]/g, '')) || 0;
+
+      if (!precio || !montoLeido) {
+        return rechazar('monto_ilegible', 'No se pudo leer el monto con seguridad.');
+      }
+
+      if (montoLeido < precio) {
+        return rechazar('monto_insuficiente', `Transfirió ${montoLeido} y el material sale ${precio}.`);
+      }
+
+      if (precio > envConfig.entregaAutomatica.montoMaximo) {
+        return rechazar('monto_alto', 'Por encima del tope para aprobar sin revisión.');
+      }
+
+      // La cuenta que recibe tiene que ser la nuestra. Se comparan solo los
+      // dígitos y por terminación, porque cada banco recorta el número de una
+      // forma distinta en la captura.
+      const cuentaPropia = String(process.env.PAGO_CUENTA || '').replace(/[^0-9]/g, '');
+      const cuentaLeida = String(cuenta || '').replace(/[^0-9]/g, '');
+
+      if (!cuentaPropia || !cuentaLeida) {
+        return rechazar('cuenta_ilegible', 'No se pudo leer la cuenta de destino.');
+      }
+
+      if (!cuentaPropia.endsWith(cuentaLeida) && !cuentaLeida.endsWith(cuentaPropia)) {
+        return rechazar('cuenta_ajena', 'La transferencia figura a otra cuenta.');
+      }
+
+      if (!operacionLimpia) {
+        return rechazar('sin_operacion', 'El comprobante no muestra número de operación.');
+      }
+
+      const repetida = await orderRepository.operacionYaUsada(operacionLimpia, id);
+      if (repetida) {
+        console.warn(
+          `🚨 [ENTREGA AUTO] Pedido #${id}: la operación ${operacionLimpia} ya cobró el pedido #${repetida.id}. ` +
+          'Se manda a revisión humana.'
+        );
+        return rechazar('operacion_repetida', `Ese comprobante ya se usó en el pedido #${repetida.id}.`);
+      }
+
+      // Pasó todo. Se cobra y se entrega, marcado como aprobado por el sistema
+      // para que a la mañana se pueda repasar contra el extracto.
+      const pagado = await orderRepository.cambiarEstado(id, 'pagado', {
+        confirmedBy: null,
+        autoAprobado: true,
+        receiptOperacion: operacionLimpia,
+        // Solo si es un id numérico de la base. El guion a veces manda acá el
+        // identificador de Meta ("wamid.…"), que no es un número y rompería el
+        // UPDATE justo en el momento de cobrar.
+        receiptMessageId: Number.isInteger(Number(receipt_message_id)) ? Number(receipt_message_id) : null,
+        note: `Aprobado automáticamente a las ${horaEnParaguay()}h: monto ${montoLeido}, operación ${operacionLimpia}.`
+      });
+
+      const entrega = await deliveryService.entregar(pedido, null);
+
+      let estadoFinal = pagado;
+      if (entrega.enviado) {
+        const entregado = await orderRepository.cambiarEstado(id, 'entregado', { autoAprobado: true });
+        if (entregado) estadoFinal = entregado;
+        await deliveryService.marcarClienteQueCompro(pedido.conversation_id);
+      }
+
+      const conv = await conversationRepository.findById(pedido.conversation_id);
+      if (conv) {
+        socketManager.emitConversationUpdated(conv.channel_id, {
+          id: conv.id,
+          order_status: estadoFinal.status
+        });
+      }
+
+      console.log(
+        `🌙 [ENTREGA AUTO] Pedido #${id} cobrado y entregado sin revisión humana ` +
+        `(${horaEnParaguay()}h, operación ${operacionLimpia}).`
+      );
+
+      return res.json({
+        entregado: Boolean(entrega.enviado),
+        motivo: entrega.enviado ? null : entrega.motivo,
+        detalle: entrega.detalle || null,
+        estado: estadoFinal.status,
+        hora_paraguay: horaEnParaguay()
+      });
+    } catch (error) {
+      // Ante cualquier problema, el comprobante queda para una persona. Nunca
+      // al revés.
+      return res.status(500).json({ entregado: false, motivo: 'error', error: error.message });
     }
   }
 };

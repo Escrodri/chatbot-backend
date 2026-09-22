@@ -9,6 +9,11 @@ export const orderRouter = Router();
 orderRouter.get('/', requireAuth, orderController.list);
 orderRouter.get('/summary', requireAuth, orderController.summary);
 
+// El embudo: cuánta gente llegó a cada paso, en total y abierto por anuncio.
+// Es lo que contesta cuál anuncio trae gente que compra y no solo gente que
+// escribe. Va antes de /:id para que "embudo" no se lea como un id.
+orderRouter.get('/embudo', requireAuth, orderController.embudo);
+
 // Abrir/recuperar pedido. Lo llama n8n: la respuesta trae `duplicado` y
 // `ya_pago`, que es el "buscar duplicado" del flujo viejo resuelto de una.
 orderRouter.post('/', requireAuthOrService, orderController.createOrGet);
@@ -17,5 +22,14 @@ orderRouter.get('/conversation/:conversationId', requireAuthOrService, orderCont
 // Cambio de estado. El controlador rechaza que un servicio marque 'pagado':
 // esa transición la hace una persona mirando el banco.
 orderRouter.patch('/:id/status', requireAuthOrService, orderController.updateStatus);
+
+// Comprobante llegado de madrugada: el backend decide si lo puede aprobar y
+// entregar solo. Es la única puerta por la que un pago se confirma sin una
+// persona, y está cerrada salvo que se cumpla todo: horario nocturno, monto
+// que llega al precio, cuenta propia y número de operación que no se usó antes.
+orderRouter.post('/:id/revision-automatica', requireAuthOrService, orderController.revisionAutomatica);
+
+// Hasta dónde llegó la persona. Lo marca el guion paso a paso y solo avanza.
+orderRouter.post('/:id/etapa', requireAuthOrService, orderController.marcarEtapa);
 
 export default orderRouter;

@@ -42,6 +42,7 @@ export const normalizerService = {
               let mediaId = null;
               let mimeType = null;
               let mediaDirectUrl = null;
+              let botonId = null;
 
               if (msg.type === 'text') {
                 contentType = 'text';
@@ -77,6 +78,19 @@ export const normalizerService = {
                 mimeType = msg.document?.mime_type;
                 mediaDirectUrl = msg.document?.url;
                 textContent = msg.document?.filename ? `📄 ${msg.document.filename}` : '📄 [Documento]';
+              } else if (msg.type === 'interactive') {
+                // Tocó un botón. Meta no manda texto acá: manda el id y el
+                // título del botón que eligió.
+                //
+                // El título se guarda como si lo hubiera escrito, así en la
+                // bandeja el asesor lee "COMPRAR AHORA" y no un código. El id
+                // viaja aparte porque es lo que el guion usa para rutear: si
+                // mañana el botón pasa a decir "LO QUIERO", el id sigue siendo
+                // el mismo y no se rompe nada.
+                contentType = 'text';
+                const eleccion = msg.interactive?.button_reply || msg.interactive?.list_reply || {};
+                textContent = eleccion.title || eleccion.id || '[Respuesta sin texto]';
+                botonId = eleccion.id || null;
               } else if (msg.type === 'reaction') {
                 continue; // Omitir reacciones por el momento
               } else {
@@ -90,8 +104,6 @@ export const normalizerService = {
               // acá el identificador del clic. Solo viene en este primer mensaje: si
               // no se guarda ahora, la venta no se puede atribuir al anuncio nunca más.
               const ref = msg.referral || null;
-
-              const isViewOnce = Boolean(msg.image?.view_once || msg.video?.view_once);
 
               events.push({
                 platform: 'whatsapp',
@@ -120,7 +132,7 @@ export const normalizerService = {
                   mediaId,
                   mimeType,
                   mediaDirectUrl,
-                  isViewOnce
+                  botonId
                 }
               });
             }

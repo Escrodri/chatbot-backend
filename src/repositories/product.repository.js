@@ -33,6 +33,7 @@ export const productRepository = {
 
     const { rows } = await query(
       `SELECT id, team_id, slug, name, description, price, currency,
+              precio_recuperacion, preview_urls,
               delivery_url, delivery_note, cover_url, is_active, sort_order,
               created_at, updated_at
        FROM products
@@ -65,16 +66,20 @@ export const productRepository = {
     deliveryNote = null,
     coverUrl = null,
     isActive = true,
-    sortOrder = 0
+    sortOrder = 0,
+    precioRecuperacion = null,
+    previewUrls = null
   }) {
     const { rows } = await query(
       `INSERT INTO products
          (team_id, slug, name, description, price, currency,
-          delivery_url, delivery_note, cover_url, is_active, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          delivery_url, delivery_note, cover_url, is_active, sort_order,
+          precio_recuperacion, preview_urls)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING *`,
       [teamId, slug, name, description, price, currency,
-       deliveryUrl, deliveryNote, coverUrl, isActive, sortOrder]
+       deliveryUrl, deliveryNote, coverUrl, isActive, sortOrder,
+       precioRecuperacion, previewUrls]
     );
     return rows[0];
   },
@@ -94,7 +99,9 @@ export const productRepository = {
       deliveryNote: 'delivery_note',
       coverUrl: 'cover_url',
       isActive: 'is_active',
-      sortOrder: 'sort_order'
+      sortOrder: 'sort_order',
+      precioRecuperacion: 'precio_recuperacion',
+      previewUrls: 'preview_urls'
     };
 
     const sets = [];

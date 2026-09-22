@@ -57,7 +57,61 @@ export async function initDatabase() {
       //
       // Se pisa cada vez que una persona escribe, así que mide lo que hay que
       // medir: hace cuánto que este chat no recibe atención humana.
-      'ALTER TABLE conversations ADD COLUMN IF NOT EXISTS handed_over_at TIMESTAMPTZ'
+      'ALTER TABLE conversations ADD COLUMN IF NOT EXISTS handed_over_at TIMESTAMPTZ',
+
+      // Número de operación del comprobante, guardado aparte del texto suelto
+      // de la revisión.
+      //
+      // Es lo único del comprobante que identifica a una transferencia y no se
+      // repite. Sin esto, la misma captura sirve infinitas veces: alcanza con
+      // reenviarla, o con que circule entre conocidos, para que el bot entregue
+      // el material de nuevo. Mientras revisa una persona el problema no
+      // existe, porque se da cuenta; en la entrega automática de madrugada es
+      // la única defensa que queda.
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS receipt_operacion VARCHAR(60)',
+      'CREATE INDEX IF NOT EXISTS idx_orders_receipt_operacion ON orders (receipt_operacion) WHERE receipt_operacion IS NOT NULL',
+
+      // Este pedido lo aprobó el sistema solo, sin que nadie mirara el banco.
+      // Queda marcado para que a la mañana se puedan repasar de un vistazo los
+      // que se entregaron de madrugada y contrastarlos contra el extracto.
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS auto_aprobado BOOLEAN NOT NULL DEFAULT FALSE',
+
+      // Precio para recuperar a quien se quedó a mitad de camino.
+      //
+      // Va como campo del producto y no escrito en el guion a propósito: un
+      // descuento permanente se aprende, y en un mercado chico alcanza con que
+      // un par de personas comenten que esperando baja para que esperar salga
+      // gratis. Estando acá se apaga vaciando el campo, sin tocar el flujo.
+      //
+      // Vacío significa que no hay precio de recuperación y se insiste al
+      // precio de siempre.
+      'ALTER TABLE products ADD COLUMN IF NOT EXISTS precio_recuperacion NUMERIC(14, 2)',
+
+      // Páginas de muestra: dos o tres imágenes, una URL por línea.
+      //
+      // Quien duda de un material para chicos duda de cómo se ve, no de la
+      // descripción. Mostrar dos páginas responde esa pregunta mejor que
+      // cualquier texto, y mandar quince la vuelve a abrir: si ya vio todo,
+      // no le queda nada por comprar.
+      'ALTER TABLE products ADD COLUMN IF NOT EXISTS preview_urls TEXT',
+
+      // Hasta dónde llegó esta persona. Es distinto del estado del pedido y va
+      // en su propia columna a propósito.
+      //
+      // `status` responde "¿qué hago con esto ahora?" y por eso va y viene: un
+      // pedido rechazado puede volver a comprobante_recibido cuando mandan la
+      // captura buena. Sirve para trabajar, no para medir: si alguien llegó
+      // hasta el pago y después volvió atrás, el estado ya no recuerda que
+      // llegó.
+      //
+      // `etapa` responde "¿hasta dónde llegó?" y solo avanza. Eso es lo que
+      // permite comparar anuncios por costo por venta real en vez de por costo
+      // por conversación, y es también lo que decide a quién se le insiste con
+      // descuento: el que pidió los datos de pago y no transfirió no es el
+      // mismo caso que el que preguntó el precio y nunca volvió.
+      "ALTER TABLE orders ADD COLUMN IF NOT EXISTS etapa VARCHAR(30) NOT NULL DEFAULT 'entro'",
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS etapa_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP',
+      'CREATE INDEX IF NOT EXISTS idx_orders_etapa ON orders (etapa, etapa_at)'
     ];
 
     for (const sql of columnMigrations) {

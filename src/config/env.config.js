@@ -184,6 +184,27 @@ export const envConfig = Object.freeze({
     reactivarTrasHoras: parseInt(process.env.AUTOMATION_REACTIVAR_HORAS || '12', 10),
   },
 
+  // Entrega automática de madrugada.
+  //
+  // De día el pago lo confirma una persona mirando el banco, que es lo
+  // correcto. De madrugada no hay nadie, y alguien que transfirió a las dos de
+  // la mañana no va a esperar contento hasta las nueve: a esa hora ya escribió
+  // tres veces preguntando si lo estafaron.
+  //
+  // Para un PDF de Gs. 19.000 la cuenta cierra: si un comprobante falso pasa,
+  // se pierde una copia de un archivo que no tiene costo de producción. Hacer
+  // esperar ocho horas a alguien que sí pagó cuesta bastante más que eso.
+  //
+  // Solo entrega sola cuando la lectura no deja dudas, y nunca por encima de
+  // `montoMaximo`: de ahí para arriba el riesgo deja de ser simétrico y
+  // conviene que lo mire una persona aunque tarde.
+  entregaAutomatica: {
+    habilitada: (process.env.ENTREGA_AUTO_NOCTURNA || 'true').trim().toLowerCase() !== 'false',
+    desdeHora: parseInt(process.env.ENTREGA_AUTO_DESDE || '21', 10),
+    hastaHora: parseInt(process.env.ENTREGA_AUTO_HASTA || '8', 10),
+    montoMaximo: parseInt(process.env.ENTREGA_AUTO_MONTO_MAX || '50000', 10),
+  },
+
   // Números con los que se prueba el flujo.
   //
   // Reiniciar una conversación borra sus mensajes y su pedido, y eso no puede
@@ -239,6 +260,45 @@ export function esTelefonoDePrueba(telefono) {
   if (!buscado) return false;
 
   return envConfig.pruebas.telefonos.some(p => cola(p) === buscado);
+}
+
+/**
+ * Qué hora es en Paraguay, como número de 0 a 23.
+ *
+ * El servidor corre en UTC, así que preguntarle la hora al reloj del proceso
+ * da una respuesta que no sirve para decidir nada que tenga que ver con la
+ * gente: a las 3 de la mañana en Asunción son las 7 en el servidor, y un
+ * "todavía es horario laboral" calculado así manda mensajes de madrugada.
+ *
+ * @param {Date} [fecha]
+ * @returns {number}
+ */
+export function horaEnParaguay(fecha = new Date()) {
+  return parseInt(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Asuncion',
+      hour: '2-digit',
+      hour12: false
+    }).format(fecha),
+    10
+  );
+}
+
+/**
+ * ¿Estamos en la franja en la que no hay nadie atendiendo?
+ *
+ * @param {Date} [fecha]
+ * @returns {boolean}
+ */
+export function esHorarioNocturno(fecha = new Date()) {
+  const h = horaEnParaguay(fecha);
+  const { desdeHora, hastaHora } = envConfig.entregaAutomatica;
+
+  // La franja cruza la medianoche (21 a 8), así que no se puede comparar como
+  // un rango normal: a las 23 hay que dar verdadero, y 23 no está "entre" 21 y 8.
+  return desdeHora > hastaHora
+    ? (h >= desdeHora || h < hastaHora)
+    : (h >= desdeHora && h < hastaHora);
 }
 
 export default envConfig;

@@ -114,6 +114,11 @@ function horaEnParaguay(fecha) {
  */
 function saludoSegunHora(fecha) {
   const h = horaEnParaguay(fecha);
+
+  // De madrugada no va ningún "buen día". A las cuatro de la mañana ese saludo
+  // no lo escribe una persona, y "buenas noches" a esa hora se lee como
+  // despedida. "Hola" es lo único que no queda mal a ninguna hora.
+  if (h < 5) return 'Hola';
   if (h < 12) return 'Buen día';
   if (h < 19) return 'Buenas tardes';
   return 'Buenas noches';
@@ -538,7 +543,12 @@ export const automationService = {
         type: ultimo.content_type || 'text',
         text: textoJunto,
         media_url: ultimo.media_url || null,
-        meta_media_id: ultimo.meta_media_id || null
+        meta_media_id: ultimo.meta_media_id || null,
+
+        // Identificador del botón que tocó, cuando en vez de escribir eligió
+        // una opción. Es una respuesta exacta y sin ambigüedad, así que el
+        // guion la puede rutear sin pasar por ningún reconocimiento de texto.
+        boton_id: ultimo.boton_id || null
       },
 
       // Cuántas líneas mandó de corrido. Sirve para saber, mirando una

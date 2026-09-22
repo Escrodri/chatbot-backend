@@ -209,13 +209,21 @@ export const conversationController = {
   async sendMessage(req, res) {
     try {
       const id = parseInt(req.params.id, 10);
-      const { text, fileBase64, fileName, mimeType, view_once } = req.body;
+      // `buttons` son las opciones que se le muestran al cliente para que
+      // conteste tocando en vez de escribiendo. Las manda el guion; un asesor
+      // escribiendo a mano no las usa. Llegan como [{id, title}].
+      // `media_url` es una imagen que ya vive en una dirección pública, como la
+      // portada de un producto. Se usa para el encabezado del mensaje con
+      // botones: mandar la misma imagen subiéndola de nuevo en base64 obligaba
+      // a bajarla y volver a subirla en cada conversación, y para una portada
+      // que no cambia nunca eso es trabajo repetido sin ninguna ganancia.
+      const { text, fileBase64, fileName, mimeType, view_once, buttons, media_url } = req.body;
 
       if (isNaN(id)) {
         return res.status(400).json({ error: 'ID de conversación inválido' });
       }
 
-      if ((!text || !text.trim()) && !fileBase64) {
+      if ((!text || !text.trim()) && !fileBase64 && !/^https?:\/\//i.test(String(media_url || ''))) {
         return res.status(400).json({ error: 'El mensaje debe contener texto o un archivo adjunto' });
       }
 
@@ -249,8 +257,18 @@ export const conversationController = {
         savedMedia = await mediaService.respaldar(savedMedia);
       }
 
-      const contentType = savedMedia ? savedMedia.contentType : 'text';
-      const mediaUrl = savedMedia ? savedMedia.localUrl : null;
+      // Una imagen que ya está publicada en otro lado —la portada del producto,
+      // una página de muestra— se usa tal cual.
+      //
+      // Se exige dirección absoluta: Meta la descarga desde sus servidores, y
+      // una ruta relativa que no pueda resolver tumba el mensaje entero en vez
+      // de mandarlo sin foto.
+      const portadaExterna = (!savedMedia && /^https?:\/\//i.test(String(media_url || '')))
+        ? String(media_url)
+        : null;
+
+      const contentType = savedMedia ? savedMedia.contentType : (portadaExterna ? 'image' : 'text');
+      const mediaUrl = savedMedia ? savedMedia.localUrl : portadaExterna;
       const defaultMediaText = savedMedia ? (savedMedia.contentType === 'audio' ? '🎵 [Nota de voz / Audio]' : `[Archivo: ${savedMedia.fileName}]`) : '';
       const messageText = (text || defaultMediaText).trim();
 
@@ -325,7 +343,8 @@ export const conversationController = {
             localFilePath: savedMedia?.filePath,
             mimeType: savedMedia?.mimeType,
             lastCustomerInteraction: conv.last_customer_interaction,
-            viewOnce: view_once && contentType === 'image'
+            viewOnce: view_once && contentType === 'image',
+            buttons
           });
           metaMessageId = sendResult?.metaMessageId || null;
 

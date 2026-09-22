@@ -1,6 +1,50 @@
 import { query } from '../database/index.js';
 
 /**
+ * El recorrido completo, en orden.
+ *
+ * Es una escalera: se sube de a un escalón o de varios, pero nunca se baja. Si
+ * alguien que ya pidió los datos de pago vuelve a escribir "hola", sigue
+ * siendo alguien que pidió los datos de pago — tratarlo otra vez como un
+ * curioso sería perder justo el dato que dice que estuvo a punto de comprar.
+ *
+ * El orden importa más que los nombres: es lo que convierte una lista de
+ * etiquetas en un embudo que se puede medir.
+ */
+export const ETAPAS = Object.freeze([
+  'entro',              // Escribió por primera vez
+  'vio_producto',       // Recibió la presentación con el precio
+  'vio_muestras',       // Pidió ver páginas de muestra
+  'pidio_comprar',      // Dijo que sí o tocó el botón de comprar
+  'recibio_datos',      // Se le mandaron los datos de la transferencia
+  'mando_comprobante',  // Mandó la captura
+  'pago',               // El pago quedó confirmado
+  'recibio_material'    // Se le entregó el enlace
+]);
+
+/** Posición de una etapa en la escalera, o -1 si no existe. */
+export function posicionEtapa(etapa) {
+  return ETAPAS.indexOf(String(etapa || ''));
+}
+
+/**
+ * La etapa que le corresponde a un estado del pedido, cuando hay una.
+ *
+ * Existe para que las dos columnas no se contradigan: marcar un pedido como
+ * pagado a mano desde el tablero tiene que mover el embudo igual que si lo
+ * hubiera movido el guion, o las métricas van a decir que nadie llegó nunca a
+ * pagar.
+ */
+export function etapaSegunEstado(estado) {
+  const mapa = {
+    comprobante_recibido: 'mando_comprobante',
+    pagado: 'pago',
+    entregado: 'recibio_material'
+  };
+  return mapa[estado] || null;
+}
+
+/**
  * Repositorio de Pedidos.
  *
  * Reemplaza a la planilla de "Ventas" y "No Pagados" del flujo viejo. La
@@ -40,8 +84,11 @@ export const orderRepository = {
    */
   async findConEntrega(id) {
     const { rows } = await query(
+      // El precio viene del producto y no de la columna `amount` del pedido:
+      // los pedidos que abre el guion nacen sin monto, así que validar un
+      // comprobante contra `amount` sería validarlo contra un nulo.
       `SELECT o.*, p.name AS product_name, p.slug AS product_slug,
-              p.delivery_url, p.delivery_note
+              p.price, p.delivery_url, p.delivery_note
        FROM orders o
        LEFT JOIN products p ON o.product_id = p.id
        WHERE o.id = $1`,
@@ -130,12 +177,157 @@ export const orderRepository = {
   },
 
   /**
+   * Anota que el pedido llegó hasta una etapa. Nunca lo hace retroceder.
+   *
+   * El "nunca retrocede" no es un detalle de implementación, es la definición:
+   * la etapa mide hasta dónde llegó alguien, y eso no se deshace porque después
+   * escriba otra cosa. Se resuelve en la consulta y no en JavaScript para que
+   * dos mensajes que llegan al mismo tiempo no puedan pisarse entre sí.
+   *
+   * @param {number} id
+   * @param {string} etapa
+   * @returns {Promise<object|null>}
+   */
+  async marcarEtapa(id, etapa) {
+    const destino = posicionEtapa(etapa);
+    if (destino < 0) return null;
+
+    const { rows } = await query(
+      `UPDATE orders
+       SET etapa = $1,
+           etapa_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+         AND array_position($3::text[], etapa) < array_position($3::text[], $1)
+       RETURNING *`,
+      [etapa, id, ETAPAS]
+    );
+
+    // Sin filas no es un error: significa que ya estaba en esa etapa o más
+    // adelante, que es exactamente lo que tenía que pasar.
+    return rows[0] || null;
+  },
+
+  /**
+   * El embudo completo, y el mismo embudo abierto por anuncio.
+   *
+   * Es la consulta que contesta la única pregunta que importa cuando hay plata
+   * puesta en publicidad: cuál anuncio trae gente que compra, no cuál trae
+   * gente que escribe. Dos anuncios pueden abrir la misma cantidad de
+   * conversaciones y que uno venda el triple.
+   *
+   * @param {{ desde?: string|Date|null }} opciones
+   */
+  async embudo({ desde = null } = {}) {
+    const filtro = desde ? 'WHERE o.created_at >= $1' : '';
+    const params = desde ? [desde] : [];
+
+    const { rows: total } = await query(
+      `SELECT o.etapa, COUNT(*)::int AS cantidad
+       FROM orders o
+       ${filtro}
+       GROUP BY o.etapa`,
+      params
+    );
+
+    const { rows: porAnuncio } = await query(
+      `SELECT COALESCE(c.source_ad_id, 'sin_anuncio') AS anuncio,
+              o.etapa,
+              COUNT(*)::int AS cantidad
+       FROM orders o
+       INNER JOIN conversations c ON o.conversation_id = c.id
+       ${filtro}
+       GROUP BY 1, 2
+       ORDER BY 1`,
+      params
+    );
+
+    // Se devuelve la escalera completa, con ceros incluidos: un embudo al que
+    // le faltan los escalones vacíos se lee como si nadie se hubiera caído ahí,
+    // cuando es justo al revés.
+    const vacio = () => Object.fromEntries(ETAPAS.map(e => [e, 0]));
+
+    const general = vacio();
+    for (const f of total) {
+      if (f.etapa in general) general[f.etapa] = f.cantidad;
+    }
+
+    const anuncios = {};
+    for (const f of porAnuncio) {
+      if (!anuncios[f.anuncio]) anuncios[f.anuncio] = vacio();
+      if (f.etapa in anuncios[f.anuncio]) anuncios[f.anuncio][f.etapa] = f.cantidad;
+    }
+
+    return { etapas: ETAPAS, general, anuncios };
+  },
+
+  /**
+   * Pedidos que se quedaron a mitad de camino y están listos para insistir.
+   *
+   * @param {{ etapaMinima?: string, desdeMin?: number, hastaMin?: number }} opciones
+   */
+  async abandonados({ etapaMinima = 'vio_producto', desdeMin = 120, hastaMin = 1380 } = {}) {
+    const { rows } = await query(
+      `SELECT o.id, o.etapa, o.etapa_at, o.conversation_id, o.product_id, o.contact_phone,
+              EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - o.etapa_at)) / 60 AS minutos,
+              c.last_customer_interaction, c.bot_status, ch.platform
+       FROM orders o
+       INNER JOIN conversations c ON o.conversation_id = c.id
+       INNER JOIN channels ch ON c.channel_id = ch.id
+       WHERE o.status NOT IN ('pagado', 'entregado')
+         AND array_position($1::text[], o.etapa) >= array_position($1::text[], $2)
+         AND o.etapa_at <= CURRENT_TIMESTAMP - ($3 || ' minutes')::interval
+         AND o.etapa_at >= CURRENT_TIMESTAMP - ($4 || ' minutes')::interval
+       ORDER BY o.etapa_at ASC`,
+      [ETAPAS, etapaMinima, String(desdeMin), String(hastaMin)]
+    );
+
+    return rows;
+  },
+
+  /**
+   * ¿Este número de operación ya se usó para cobrar otro pedido?
+   *
+   * Una captura de transferencia se reenvía con dos toques. Si el mismo
+   * comprobante sirve dos veces, al primero que se dé cuenta le alcanza con
+   * pasárselo a quien quiera, y el bot entrega el material cada vez. El número
+   * de operación es lo único de esa imagen que el banco no repite.
+   *
+   * Solo cuentan los pedidos que llegaron a cobrarse: que el mismo número
+   * aparezca en uno rechazado no es un fraude, es alguien reintentando.
+   *
+   * @param {string|null} operacion
+   * @param {number|null} exceptoPedidoId Para que un pedido no choque consigo mismo
+   * @returns {Promise<object|null>} El pedido que ya lo usó, si existe
+   */
+  async operacionYaUsada(operacion, exceptoPedidoId = null) {
+    const limpio = String(operacion || '').replace(/[^0-9]/g, '');
+
+    // Un número corto no identifica nada: puede ser un recorte de la imagen o
+    // una lectura a medias. Darlo por repetido rechazaría pagos legítimos.
+    if (limpio.length < 4) return null;
+
+    const { rows } = await query(
+      `SELECT id, status, contact_phone, confirmed_at
+       FROM orders
+       WHERE receipt_operacion = $1
+         AND status IN ('pagado', 'entregado')
+         AND ($2::int IS NULL OR id <> $2)
+       ORDER BY confirmed_at DESC NULLS LAST
+       LIMIT 1`,
+      [limpio, exceptoPedidoId]
+    );
+
+    return rows[0] || null;
+  },
+
+  /**
    * Cambia el estado del pedido.
    *
    * 'pagado' y 'entregado' sellan además la fecha y quién lo confirmó, porque
    * son los dos momentos que después alguien va a querer auditar.
    */
-  async cambiarEstado(id, estado, { confirmedBy = null, note = null, receiptCheck = null, receiptMessageId = null } = {}) {
+  async cambiarEstado(id, estado, { confirmedBy = null, note = null, receiptCheck = null, receiptMessageId = null, receiptOperacion = null, autoAprobado = null } = {}) {
     // Que el pedido avance significa que el guion sí entendió: el contador de
     // intentos vuelve a cero y la IA deja de estar a un paso de intervenir.
     const sets = ['status = $1', 'updated_at = CURRENT_TIMESTAMP', 'bot_intentos = 0'];
@@ -170,13 +362,40 @@ export const orderRepository = {
       sets.push(`receipt_message_id = $${params.length}`);
     }
 
+    if (receiptOperacion !== null) {
+      // Solo los dígitos: la misma operación puede venir leída como "884512",
+      // "Nº 884512" o "884.512" según el banco y el recorte de la captura, y
+      // tres formas distintas del mismo número no sirven para detectar que se
+      // repite.
+      params.push(String(receiptOperacion).replace(/[^0-9]/g, '') || null);
+      sets.push(`receipt_operacion = $${params.length}`);
+    }
+
+    if (autoAprobado !== null) {
+      params.push(Boolean(autoAprobado));
+      sets.push(`auto_aprobado = $${params.length}`);
+    }
+
     params.push(id);
 
     const { rows } = await query(
       `UPDATE orders SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING *`,
       params
     );
-    return rows[0] || null;
+
+    const actualizado = rows[0] || null;
+    if (!actualizado) return null;
+
+    // Que el estado avance tiene que mover el embudo también. Si no, un pago
+    // confirmado a mano desde el tablero no cuenta como venta en las métricas,
+    // y el anuncio que lo trajo aparece como si no hubiera vendido nada.
+    const etapa = etapaSegunEstado(estado);
+    if (etapa) {
+      const conEtapa = await this.marcarEtapa(id, etapa);
+      if (conEtapa) return conEtapa;
+    }
+
+    return actualizado;
   },
 
   /** Resumen para el tablero: cuántos hay en cada estado. */
