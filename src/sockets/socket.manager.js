@@ -15,23 +15,26 @@ import { pool } from '../database/pool.js';
  *    - NUNCA se transmiten mensajes de una empresa a los administradores de otra empresa.
  */
 
+const ROOM_ADMINS = 'admins';
+const ROOM_SUPERADMINS = 'superadmins';
 const roomForTeamAdmins = (teamId) => teamId ? `team_${teamId}_admins` : 'team_global_admins';
 const roomForChannel = (channelId) => `channel_${channelId}`;
 
 const channelTeamCache = new Map();
 
 async function resolveTeamIdForChannel(channelId) {
-  if (!channelId) return null;
+  if (!channelId) return 1;
   const cId = Number(channelId);
   if (channelTeamCache.has(cId)) return channelTeamCache.get(cId);
   try {
     const { rows } = await pool.query('SELECT team_id FROM channels WHERE id = $1', [cId]);
-    if (rows.length > 0 && rows[0].team_id) {
-      channelTeamCache.set(cId, rows[0].team_id);
-      return rows[0].team_id;
+    if (rows.length > 0) {
+      const resolved = rows[0].team_id || 1;
+      channelTeamCache.set(cId, resolved);
+      return resolved;
     }
   } catch {}
-  return null;
+  return 1;
 }
 
 /** Extrae el valor de una cookie concreta de la cabecera Cookie. */
@@ -110,9 +113,22 @@ class SocketManager {
 
       // Los canales visibles se resuelven en el servidor, no los pide el cliente.
       try {
-        socket.data.channelIds = payload.role === 'admin'
-          ? null // null = todos los canales de su equipo
-          : await userRepository.getAssignedChannelIds(payload.id);
+        if (payload.role === 'admin' || payload.role === 'superadmin') {
+          socket.data.channelIds = null; // Tienen visibilidad global o de todo su equipo
+        } else {
+          let assigned = await userRepository.getAssignedChannelIds(payload.id);
+          // Si el operador no tiene canales restringidos explícitamente en user_channel_assignments,
+          // hereda automáticamente todos los canales de su equipo para no quedarse sin visibilidad
+          if (!assigned || assigned.length === 0) {
+            const teamId = payload.team_id || 1;
+            const { rows } = await pool.query(
+              'SELECT id FROM channels WHERE (team_id = $1 OR team_id IS NULL) AND deleted_at IS NULL',
+              [teamId]
+            );
+            assigned = rows.map(r => r.id);
+          }
+          socket.data.channelIds = assigned;
+        }
       } catch (err) {
         console.error('❌ [SOCKET] No se pudieron resolver los canales asignados:', err.message);
         return next(new Error('No se pudo verificar el acceso a los canales'));
@@ -125,10 +141,17 @@ class SocketManager {
     this.io.on('connection', (socket) => {
       const { user, channelIds } = socket.data;
 
-      if (user.role === 'admin') {
+      if (user.role === 'superadmin') {
+        socket.join(ROOM_SUPERADMINS);
+        socket.join(ROOM_ADMINS);
+        socket.join(roomForTeamAdmins(1));
         if (user.team_id) {
           socket.join(roomForTeamAdmins(user.team_id));
         }
+      } else if (user.role === 'admin') {
+        socket.join(ROOM_ADMINS);
+        const teamId = user.team_id || 1;
+        socket.join(roomForTeamAdmins(teamId));
       } else {
         for (const channelId of channelIds || []) {
           socket.join(roomForChannel(channelId));
@@ -137,12 +160,12 @@ class SocketManager {
 
       console.log(
         `⚡ [SOCKET] ${user.email} (${user.role}) conectado. ` +
-        `Equipo: #${user.team_id || 'global'} | Canales: ${user.role === 'admin' ? 'todos del equipo' : (channelIds || []).join(', ') || 'ninguno'}`
+        `Equipo: #${user.team_id || 'global'} | Canales: ${user.role === 'admin' || user.role === 'superadmin' ? 'todos' : (channelIds || []).join(', ') || 'ninguno'}`
       );
 
       socket.on('join_inbox', () => {});
       socket.on('join_channel', (channelId) => {
-        const permitido = user.role === 'admin' || (channelIds || []).includes(Number(channelId));
+        const permitido = user.role === 'superadmin' || user.role === 'admin' || (channelIds || []).includes(Number(channelId));
         if (!permitido) {
           console.warn(`🚫 [SOCKET] ${user.email} intentó unirse al canal ${channelId} sin permiso.`);
         }
@@ -167,10 +190,12 @@ class SocketManager {
   _audience(channelId, teamId = null) {
     if (!this.io) return null;
     let target = this.io;
+    // Superadministradores y administradores globales reciben todos los eventos del sistema
+    target = target.to(ROOM_SUPERADMINS).to(ROOM_ADMINS);
     if (channelId) {
       target = target.to(roomForChannel(channelId));
     }
-    const effectiveTeamId = teamId || (channelId ? channelTeamCache.get(Number(channelId)) : null);
+    const effectiveTeamId = teamId || (channelId ? channelTeamCache.get(Number(channelId)) : null) || 1;
     if (effectiveTeamId) {
       target = target.to(roomForTeamAdmins(effectiveTeamId));
     }

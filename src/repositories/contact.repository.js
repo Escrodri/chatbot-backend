@@ -56,15 +56,25 @@ export const contactRepository = {
     const params = [];
     let i = 1;
 
-    if (teamId) { condiciones.push(`ch.team_id = $${i++}`); params.push(teamId); }
+    if (teamId) { 
+      condiciones.push(`(ch.team_id = $${i++} OR ch.team_id IS NULL)`); 
+      params.push(teamId); 
+    }
 
-    if (assignedChannelIds && Array.isArray(assignedChannelIds)) {
-      if (assignedChannelIds.length === 0) return [];
+    if (assignedChannelIds && Array.isArray(assignedChannelIds) && assignedChannelIds.length > 0) {
       condiciones.push(`ct.channel_id = ANY($${i++})`);
       params.push(assignedChannelIds);
     }
 
-    if (platform) { condiciones.push(`ct.platform = $${i++}`); params.push(platform); }
+    if (platform) {
+      const isFbOrMsg = platform.toLowerCase() === 'facebook' || platform.toLowerCase() === 'messenger';
+      if (isFbOrMsg) {
+        condiciones.push(`(LOWER(ct.platform) = 'facebook' OR LOWER(ct.platform) = 'messenger')`);
+      } else {
+        condiciones.push(`ct.platform = $${i++}`);
+        params.push(platform);
+      }
+    }
 
     if (search) {
       condiciones.push(`(ct.name ILIKE $${i} OR ct.phone_or_username ILIKE $${i} OR ct.platform_user_id ILIKE $${i})`);
@@ -113,10 +123,12 @@ export const contactRepository = {
     const params = [];
     let i = 1;
 
-    if (teamId) { condiciones.push(`ch.team_id = $${i++}`); params.push(teamId); }
+    if (teamId) { 
+      condiciones.push(`(ch.team_id = $${i++} OR ch.team_id IS NULL)`); 
+      params.push(teamId); 
+    }
 
-    if (assignedChannelIds && Array.isArray(assignedChannelIds)) {
-      if (assignedChannelIds.length === 0) return { total: 0, porPlataforma: [] };
+    if (assignedChannelIds && Array.isArray(assignedChannelIds) && assignedChannelIds.length > 0) {
       condiciones.push(`ct.channel_id = ANY($${i++})`);
       params.push(assignedChannelIds);
     }

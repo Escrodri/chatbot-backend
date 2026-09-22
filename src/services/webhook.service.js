@@ -5,6 +5,7 @@ import { botService } from './bot.service.js';
 import { automationService } from './automation.service.js';
 import { mediaService } from './media.service.js';
 import { graphApiService } from './graph-api.service.js';
+import { pool } from '../database/pool.js';
 
 /**
  * Servicio de Ingesta y Procesamiento de Webhooks:
@@ -63,7 +64,27 @@ export const webhookService = {
    */
   async _processSingleEvent(event, rawPayload) {
     // 1. Localizar el canal registrado en el sistema
-    const channel = await channelRepository.findByIdentifier(event.channelIdentifier);
+    let channel = await channelRepository.findByIdentifier(event.channelIdentifier);
+
+    // Fallback de resiliencia: Si no se encuentra activo, verificar si está archivado y reactivarlo
+    if (!channel) {
+      channel = await channelRepository.findAnyByIdentifier(event.channelIdentifier);
+      if (channel) {
+        console.log(`♻️ [WEBHOOK] Canal #${channel.id} (${channel.platform}) estaba archivado. Reactivando automáticamente...`);
+        await pool.query(
+          `UPDATE channels 
+           SET deleted_at = NULL, 
+               status = 'active', 
+               team_id = COALESCE(team_id, 1),
+               updated_at = CURRENT_TIMESTAMP 
+           WHERE id = $1`,
+          [channel.id]
+        );
+        channel.deleted_at = null;
+        channel.status = 'active';
+        channel.team_id = channel.team_id || 1;
+      }
+    }
 
     if (!channel) {
       console.warn(`⚠️ [WEBHOOK] Evento recibido para un canal no registrado: ${event.channelIdentifier} (${event.platform})`);
@@ -79,6 +100,13 @@ export const webhookService = {
         // Ignorar si la base de datos de logs no está disponible en este momento
       }
       return;
+    }
+
+    // Auto-sanar canales que no tengan equipo asignado tras la migración multi-tenant
+    if (!channel.team_id) {
+      console.log(`🔧 [WEBHOOK] Canal #${channel.id} no tenía team_id asignado. Asignando a equipo #1...`);
+      await pool.query('UPDATE channels SET team_id = 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [channel.id]);
+      channel.team_id = 1;
     }
 
     // 2. Manejar eventos de estado de entrega (delivery / read / failure)

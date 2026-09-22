@@ -203,6 +203,7 @@ export const channelRepository = {
    * @returns {Promise<object>}
    */
   async upsert({ teamId = 1, platform, name, channelIdentifier, appId = null, appSecret = null, accessToken, colorTag = '#25D366', status = 'active' }) {
+    const safeTeamId = teamId || 1;
     const encryptedToken = encryptSecret(accessToken.trim());
     let encryptedSecretJson = null;
     if (appSecret) {
@@ -218,7 +219,7 @@ export const channelRepository = {
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, CURRENT_TIMESTAMP)
        ON CONFLICT (channel_identifier) DO UPDATE SET
-         team_id = COALESCE(EXCLUDED.team_id, channels.team_id),
+         team_id = COALESCE(EXCLUDED.team_id, channels.team_id, 1),
          platform = EXCLUDED.platform,
          name = EXCLUDED.name,
          app_id = COALESCE(EXCLUDED.app_id, channels.app_id),
@@ -233,7 +234,7 @@ export const channelRepository = {
          updated_at = CURRENT_TIMESTAMP
        RETURNING id, team_id, platform, name, channel_identifier, app_id, color_tag, status, created_at, updated_at`,
       [
-        teamId,
+        safeTeamId,
         platform,
         name.trim(),
         channelIdentifier.trim(),

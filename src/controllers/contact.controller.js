@@ -21,8 +21,10 @@ export const contactController = {
         assignedChannelIds = await userRepository.getAssignedChannelIds(req.user.id);
       }
 
+      const teamId = req.user.role === 'superadmin' ? null : (req.user.team_id || null);
+
       const contactos = await contactRepository.listWithFilters({
-        teamId: req.user.team_id || null,
+        teamId,
         platform,
         search,
         assignedChannelIds,
@@ -44,8 +46,10 @@ export const contactController = {
         assignedChannelIds = await userRepository.getAssignedChannelIds(req.user.id);
       }
 
+      const teamId = req.user.role === 'superadmin' ? null : (req.user.team_id || null);
+
       const datos = await contactRepository.stats({
-        teamId: req.user.team_id || null,
+        teamId,
         assignedChannelIds
       });
 

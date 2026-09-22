@@ -19,12 +19,18 @@ export const conversationController = {
       const { platform, channel_id, search, limit = 50, offset = 0 } = req.query;
 
       let assignedChannelIds = null;
-      // Control de acceso IDOR: operadores estándar solo ven sus canales
+      // Control de acceso IDOR: operadores estándar ven sus canales asignados (o todos los de su equipo si no hay restricción explícita)
       if (req.user.role === 'agent') {
-        assignedChannelIds = await userRepository.getAssignedChannelIds(req.user.id);
+        const ids = await userRepository.getAssignedChannelIds(req.user.id);
+        if (ids && ids.length > 0) {
+          assignedChannelIds = ids;
+        }
       }
 
+      const teamId = req.user.role === 'superadmin' ? null : (req.user.team_id || null);
+
       const conversations = await conversationRepository.listWithFilters({
+        teamId,
         platform: platform || null,
         channelId: channel_id ? parseInt(channel_id, 10) : null,
         search: search || null,
@@ -158,7 +164,7 @@ export const conversationController = {
       // Verificación IDOR
       if (req.user.role === 'agent') {
         const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
+        if (assigned.length > 0 && !assigned.includes(conv.channel_id)) {
           return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
         }
       }
@@ -214,7 +220,7 @@ export const conversationController = {
       // Verificación IDOR
       if (req.user.role === 'agent') {
         const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
+        if (assigned.length > 0 && !assigned.includes(conv.channel_id)) {
           return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
         }
       }
@@ -374,7 +380,7 @@ export const conversationController = {
       // Verificación IDOR: un operador solo actúa sobre sus canales.
       if (req.user.role === 'agent') {
         const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
+        if (assigned.length > 0 && !assigned.includes(conv.channel_id)) {
           return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
         }
       }
@@ -490,7 +496,7 @@ export const conversationController = {
       // Verificación IDOR: un operador solo actúa sobre sus canales.
       if (req.user.role === 'agent') {
         const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
+        if (assigned.length > 0 && !assigned.includes(conv.channel_id)) {
           return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
         }
       }
@@ -563,7 +569,7 @@ export const conversationController = {
 
       if (req.user.role === 'agent') {
         const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (!assigned.includes(conv.channel_id)) {
+        if (assigned.length > 0 && !assigned.includes(conv.channel_id)) {
           return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
         }
       }

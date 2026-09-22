@@ -36,10 +36,14 @@ export const conversationRepository = {
          c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id, c.created_at,
          c.ctwa_clid, c.source_ad_id, c.source_type, c.source_url,
          ct.name as contact_name, ct.phone_or_username as contact_phone, ct.avatar_url as contact_avatar, ct.platform_user_id,
-         ch.platform, ch.name as channel_name, ch.color_tag as channel_color, ch.channel_identifier, ch.waba_id
+         COALESCE(ch.platform, ct.platform) as platform, 
+         COALESCE(ch.name, 'Canal Desconectado') as channel_name, 
+         COALESCE(ch.color_tag, '#1877F2') as channel_color, 
+         ch.channel_identifier, ch.waba_id,
+         ch.team_id
        FROM conversations c
        INNER JOIN contacts ct ON c.contact_id = ct.id
-       INNER JOIN channels ch ON c.channel_id = ch.id
+       LEFT JOIN channels ch ON c.channel_id = ch.id
        WHERE c.id = $1`,
       [id]
     );
@@ -151,23 +155,31 @@ export const conversationRepository = {
     const params = [];
     let pIdx = 1;
 
-    // Aislamiento Multi-Tenant: restringir estrictamente por equipo
+    // Aislamiento Multi-Tenant: restringir por equipo pero tolerar canales sin equipo asignado (legacy)
     if (teamId) {
-      conditions.push(`ch.team_id = $${pIdx++}`);
+      conditions.push(`(ch.team_id = $${pIdx} OR ch.team_id IS NULL)`);
       params.push(teamId);
+      pIdx++;
     }
 
-    // Aislamiento IDOR: si el operador tiene canales restringidos
-    if (assignedChannelIds && Array.isArray(assignedChannelIds)) {
-      if (assignedChannelIds.length === 0) return []; // No tiene canales asignados
+    // Aislamiento IDOR: si el operador tiene canales restringidos explícitamente
+    if (assignedChannelIds && Array.isArray(assignedChannelIds) && assignedChannelIds.length > 0) {
       conditions.push(`c.channel_id = ANY($${pIdx++})`);
       params.push(assignedChannelIds);
     }
 
     if (platform) {
-      conditions.push(`(ch.platform = $${pIdx} OR ct.platform = $${pIdx})`);
-      params.push(platform);
-      pIdx++;
+      const isFbOrMsg = platform.toLowerCase() === 'facebook' || platform.toLowerCase() === 'messenger';
+      if (isFbOrMsg) {
+        conditions.push(`(
+          LOWER(COALESCE(ch.platform, ct.platform)) = 'facebook' OR 
+          LOWER(COALESCE(ch.platform, ct.platform)) = 'messenger'
+        )`);
+      } else {
+        conditions.push(`(ch.platform = $${pIdx} OR ct.platform = $${pIdx})`);
+        params.push(platform);
+        pIdx++;
+      }
     }
 
     if (channelId) {
