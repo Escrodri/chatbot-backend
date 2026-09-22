@@ -106,6 +106,7 @@ export const orderController = {
         const habilitado = ['pagado', 'entregado'].includes(p.status);
         return {
           ...p,
+          product_entregable: Boolean(p.delivery_url && p.delivery_url.trim()),
           delivery_url: habilitado ? p.delivery_url : null,
           delivery_note: habilitado ? p.delivery_note : null
         };
@@ -131,7 +132,13 @@ export const orderController = {
       const id = parseInt(req.params.id, 10);
       if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
 
-      const { status, note = null, receipt_check = null, receipt_message_id = null } = req.body || {};
+      const {
+        status,
+        note = null,
+        receipt_check = null,
+        receipt_message_id = null,
+        notify = true
+      } = req.body || {};
 
       const validos = ['interesado', 'comprobante_recibido', 'pagado', 'entregado', 'rechazado'];
       if (!validos.includes(status)) {
@@ -146,6 +153,20 @@ export const orderController = {
         });
       }
 
+      // Buscar el pedido y su información de entrega ANTES de realizar cambios
+      const conEntrega = await orderRepository.findConEntrega(id);
+      if (!conEntrega) return res.status(404).json({ error: 'Pedido no encontrado' });
+
+      // Si se confirma pago con entrega automática (notify !== false)
+      // pero el producto NO tiene delivery_url, BLOQUEAR sin modificar el estado en BD
+      const quiereEntrega = status === 'pagado' && notify !== false;
+      if (quiereEntrega && (!conEntrega.delivery_url || !conEntrega.delivery_url.trim())) {
+        return res.status(400).json({
+          error: `El producto "${conEntrega.product_name || 'seleccionado'}" no tiene enlace de entrega cargado. Cárgalo en Productos antes de confirmar la entrega.`,
+          code: 'ERR_SIN_ENLACE_ENTREGA'
+        });
+      }
+
       const actualizado = await orderRepository.cambiarEstado(id, status, {
         confirmedBy: esServicio ? null : req.user?.id || null,
         note,
@@ -155,15 +176,10 @@ export const orderController = {
 
       if (!actualizado) return res.status(404).json({ error: 'Pedido no encontrado' });
 
-      // Confirmar el pago y entregar el producto son, para el cliente, un solo
-      // momento: transfirió y espera su material. Hasta ahora el tablero hacía
-      // solo la mitad, cambiaba el estado en la base, y del otro lado no pasaba
-      // nada. Ahora el enlace sale apenas alguien confirma.
       let entrega = null;
       let estadoFinal = actualizado;
 
-      if (status === 'pagado') {
-        const conEntrega = await orderRepository.findConEntrega(actualizado.id);
+      if (status === 'pagado' && notify !== false) {
         entrega = await deliveryService.entregar(conEntrega, req.user?.id || null);
 
         // Solo se marca entregado si el mensaje salió de verdad. Si falló, el
@@ -181,10 +197,8 @@ export const orderController = {
         await deliveryService.marcarClienteQueCompro(actualizado.conversation_id);
       }
 
-      // Rechazar también tiene que avisar. Un pedido marcado como rechazado y un
-      // cliente esperando en silencio es el mismo problema que había con el pago.
-      if (status === 'rechazado') {
-        const conEntrega = await orderRepository.findConEntrega(actualizado.id);
+      // Rechazar con aviso por WhatsApp solo si notify !== false
+      if (status === 'rechazado' && notify !== false) {
         entrega = await deliveryService.avisarRechazo(conEntrega, req.user?.id || null);
       }
 

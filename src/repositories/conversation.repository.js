@@ -194,6 +194,12 @@ export const conversationRepository = {
         ch.platform, ch.name as channel_name, ch.color_tag as channel_color, ch.channel_identifier,
         o.status as order_status, o.id as order_id, o.amount as order_amount, o.currency as order_currency,
         p.name as order_product_name,
+        -- Si el producto tiene enlace de entrega cargado. Sin esto la bandeja
+        -- no puede avisar ANTES de confirmar un pago que el material no se va
+        -- a poder mandar, y el aviso llega cuando ya no sirve.
+        (p.delivery_url IS NOT NULL AND p.delivery_url <> '') as order_entregable,
+        COALESCE(cli.compras, 0) as compras_previas,
+        cli.ultima_compra,
         COALESCE(tg.tags, '[]'::json) as tags
       FROM conversations c
       INNER JOIN contacts ct ON c.contact_id = ct.id
@@ -218,6 +224,23 @@ export const conversationRepository = {
         LIMIT 1
       ) o ON TRUE
       LEFT JOIN products p ON o.product_id = p.id
+      -- Historial de compras de ESTA PERSONA, no de este chat.
+      --
+      -- Se cuenta por contacto y no por conversación a propósito: alguien que
+      -- compró por WhatsApp y vuelve a escribir por Instagram sigue siendo el
+      -- mismo cliente, y tratarlo como desconocido es el error que hace que un
+      -- comprador que vuelve se sienta un número.
+      --
+      -- Con esto la bandeja puede distinguir tres cosas que antes se veían
+      -- iguales: el que nunca compró, el que está comprando ahora, y el que ya
+      -- compró antes y volvió por otra cosa.
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS compras, MAX(o2.confirmed_at) AS ultima_compra
+        FROM orders o2
+        INNER JOIN conversations c2 ON o2.conversation_id = c2.id
+        WHERE c2.contact_id = c.contact_id
+          AND o2.status IN ('pagado', 'entregado')
+      ) cli ON TRUE
       -- Etiquetas manuales del equipo. Van agregadas como JSON en la misma
       -- consulta para no disparar una por conversacion al pintar la lista.
       LEFT JOIN LATERAL (

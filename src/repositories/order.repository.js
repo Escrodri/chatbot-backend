@@ -145,10 +145,14 @@ export const orderRepository = {
       sets.push('confirmed_at = CURRENT_TIMESTAMP');
       params.push(confirmedBy);
       sets.push(`confirmed_by = $${params.length}`);
-    }
-
-    if (estado === 'entregado') {
+    } else if (estado === 'entregado') {
       sets.push('delivered_at = CURRENT_TIMESTAMP');
+    } else {
+      // Si se revierte a interesado, comprobante_recibido o rechazado, limpiamos marcas de entrega
+      sets.push('delivered_at = NULL');
+      if (estado === 'interesado' || estado === 'comprobante_recibido') {
+        sets.push('confirmed_at = NULL', 'confirmed_by = NULL');
+      }
     }
 
     if (note !== null) {
