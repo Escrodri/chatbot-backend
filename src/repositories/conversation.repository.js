@@ -273,6 +273,66 @@ export const conversationRepository = {
 
     const { rows } = await query(sql, params);
     return rows;
+  },
+
+  /**
+   * Deja una conversación de prueba como si nunca hubiera existido.
+   *
+   * Borrar los mensajes no alcanza para volver a probar el flujo. El guion no
+   * decide qué contestar mirando el chat: mira la tabla de pedidos. Si el
+   * pedido sigue ahí, el bot sabe que ya presentó el producto y contesta como
+   * si la charla viniera de antes, aunque en pantalla no haya nada. Por eso
+   * acá se borra también el pedido, y con él el contador de intentos que
+   * decide cuándo entra la IA.
+   *
+   * Se van los eventos de conversión (si no, Meta recibe dos veces la misma
+   * venta de prueba) y las etiquetas. El contacto se conserva: es la persona,
+   * no la charla, y borrarlo obligaría a cargar el número de nuevo.
+   *
+   * Todo en una sola sentencia, así no puede quedar a medias: no existe el
+   * estado en el que los mensajes ya se fueron pero el pedido sigue vivo, que
+   * es justo el que dejaría al bot contestando cualquier cosa.
+   *
+   * @param {number} conversationId
+   * @returns {Promise<{mensajes: number, pedidos: number, eventos: number, etiquetas: number}>}
+   */
+  async reiniciarParaPrueba(conversationId) {
+    const { rows } = await query(
+      `WITH msg AS (
+         DELETE FROM messages WHERE conversation_id = $1 RETURNING 1
+       ),
+       ord AS (
+         DELETE FROM orders WHERE conversation_id = $1 RETURNING 1
+       ),
+       eve AS (
+         DELETE FROM conversion_events WHERE conversation_id = $1 RETURNING 1
+       ),
+       eti AS (
+         DELETE FROM conversation_tags WHERE conversation_id = $1 RETURNING 1
+       ),
+       conv AS (
+         UPDATE conversations
+         SET last_message_text = NULL,
+             last_message_time = NULL,
+             last_customer_interaction = NULL,
+             unread_count = 0,
+             bot_status = 'active',
+             assigned_user_id = NULL,
+             ctwa_clid = NULL,
+             source_ad_id = NULL,
+             source_type = NULL,
+             source_url = NULL
+         WHERE id = $1
+         RETURNING id
+       )
+       SELECT (SELECT COUNT(*) FROM msg)::int AS mensajes,
+              (SELECT COUNT(*) FROM ord)::int AS pedidos,
+              (SELECT COUNT(*) FROM eve)::int AS eventos,
+              (SELECT COUNT(*) FROM eti)::int AS etiquetas`,
+      [conversationId]
+    );
+
+    return rows[0] || { mensajes: 0, pedidos: 0, eventos: 0, etiquetas: 0 };
   }
 };
 

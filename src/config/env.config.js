@@ -172,6 +172,25 @@ export const envConfig = Object.freeze({
     debounceMs: parseInt(process.env.AUTOMATION_DEBOUNCE_MS || '8000', 10),
   },
 
+  // Números con los que se prueba el flujo.
+  //
+  // Reiniciar una conversación borra sus mensajes y su pedido, y eso no puede
+  // existir para un cliente real: un clic de más y se pierde el chat que
+  // originó una venta, junto con el comprobante que la respalda. Por eso el
+  // reinicio solo se habilita para los números de esta lista, y el backend lo
+  // verifica por su cuenta: esconder el botón en la pantalla no protege nada,
+  // porque la dirección se puede llamar igual desde afuera.
+  //
+  // Varios números van separados por coma.
+  pruebas: {
+    telefonos: Object.freeze(
+      (process.env.TEST_PHONES || '+595985816710')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+    ),
+  },
+
   // Almacenamiento externo de archivos (opcional).
   // Si no se configura, los archivos se guardan solo en el disco del servidor.
   cloudinary: {
@@ -181,5 +200,33 @@ export const envConfig = Object.freeze({
     folder: (process.env.CLOUDINARY_FOLDER || 'bandeja-unificada').trim(),
   }
 });
+
+/**
+ * ¿Este número es uno de los de prueba?
+ *
+ * Compara solo los últimos ocho dígitos, y por eso no importa cómo esté
+ * escrito el número: +595 985 816 710, 595985816710 y 0985816710 son la misma
+ * línea, pero como texto no se parecen en nada. Meta entrega el número en
+ * formato internacional y una persona lo carga como lo tiene agendado; si la
+ * comparación fuera literal, el botón no aparecería nunca y nadie entendería
+ * por qué.
+ *
+ * Ocho dígitos alcanzan: la lista la escribe una persona a mano y tiene dos o
+ * tres números, así que la chance de que dos terminen igual es despreciable.
+ *
+ * @param {string|null|undefined} telefono
+ * @returns {boolean}
+ */
+export function esTelefonoDePrueba(telefono) {
+  const cola = (valor) => {
+    const digitos = String(valor || '').replace(/[^0-9]/g, '');
+    return digitos.length >= 8 ? digitos.slice(-8) : '';
+  };
+
+  const buscado = cola(telefono);
+  if (!buscado) return false;
+
+  return envConfig.pruebas.telefonos.some(p => cola(p) === buscado);
+}
 
 export default envConfig;

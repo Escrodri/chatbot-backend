@@ -260,6 +260,29 @@ function encolar({ conversation, contact, channel, message }) {
 
 export const automationService = {
   /**
+   * Tira a la basura lo que esa conversación tenga esperando en la cola.
+   *
+   * Entre que alguien escribe y que el bot contesta pasan unos segundos. Si en
+   * ese hueco se reinicia la conversación para volver a probar, el temporizador
+   * sigue corriendo con mensajes que ya no existen en la base: el despacho sale
+   * igual, el guion lo lee sobre un chat vacío y contesta algo que no tiene
+   * nada que ver con lo que se está probando. Se pierden diez minutos buscando
+   * un error en el flujo que en realidad es un mensaje viejo llegando tarde.
+   *
+   * @param {number} conversationId
+   * @returns {number} Cuántas líneas quedaron sin despachar
+   */
+  cancelarCola(conversationId) {
+    const grupo = enCola.get(conversationId);
+    if (!grupo) return 0;
+
+    if (grupo.timer) clearTimeout(grupo.timer);
+    enCola.delete(conversationId);
+
+    return grupo.mensajes?.length || 0;
+  },
+
+  /**
    * ¿Está la automatización configurada y encendida?
    */
   estaActiva() {

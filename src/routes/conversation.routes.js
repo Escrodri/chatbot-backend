@@ -45,4 +45,9 @@ conversationRouter.delete('/:id/tags/:tagId', requireAuth, tagController.unassig
 // Alternar estado del bot (active, handed_over, disabled)
 conversationRouter.post('/:id/bot-toggle', requireAuth, conversationController.toggleBot);
 
+// Dejar una conversación de prueba en cero para volver a correr el flujo desde
+// el saludo. Borra mensajes y pedido, así que el controlador rechaza cualquier
+// conversación cuyo número no esté declarado en TEST_PHONES.
+conversationRouter.post('/:id/reset', requireAuth, conversationController.reiniciarPrueba);
+
 export default conversationRouter;

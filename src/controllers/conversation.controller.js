@@ -9,6 +9,8 @@ import { socketManager } from '../sockets/index.js';
 import { mediaService } from '../services/media.service.js';
 import { conversionsService } from '../services/conversions.service.js';
 import { conversionRepository } from '../repositories/conversion.repository.js';
+import { automationService } from '../services/automation.service.js';
+import { esTelefonoDePrueba } from '../config/env.config.js';
 
 export const conversationController = {
   /**
@@ -77,7 +79,11 @@ export const conversationController = {
       // Añadir cálculo en vivo de ventana de mensajería (24h/7d)
       const mapped = conversations.map(conv => ({
         ...conv,
-        window_status: timeUtil.checkMessagingWindow(conv.last_customer_interaction, conv.platform)
+        window_status: timeUtil.checkMessagingWindow(conv.last_customer_interaction, conv.platform),
+        // Marca los chats con los que se prueba el flujo. Es lo único que
+        // decide si aparece el botón de reiniciar, que borra mensajes y
+        // pedidos: en un chat de un cliente real ese botón no debe existir.
+        es_prueba: esTelefonoDePrueba(conv.contact_phone)
       }));
 
       return res.json(mapped);
@@ -140,6 +146,7 @@ export const conversationController = {
       }
 
       conv.window_status = timeUtil.checkMessagingWindow(conv.last_customer_interaction, conv.platform);
+      conv.es_prueba = esTelefonoDePrueba(conv.contact_phone);
       return res.json(conv);
     } catch (error) {
       return res.status(500).json({ error: 'Error al consultar conversación: ' + error.message });
@@ -612,6 +619,71 @@ export const conversationController = {
       return res.json({ success: true, botStatus });
     } catch (error) {
       return res.status(500).json({ error: 'Error al cambiar estado del bot: ' + error.message });
+    }
+  },
+
+  /**
+   * Deja una conversación de prueba en cero para volver a correr el flujo.
+   *
+   * Probar un guion de venta de punta a punta exige empezar siempre igual: el
+   * bot tiene que creer que nunca habló con esa persona. Y eso no se consigue
+   * borrando el chat del teléfono, porque lo que el guion consulta es el
+   * pedido guardado acá. Mientras el pedido exista, el bot contesta como si la
+   * charla viniera de antes y lo que se prueba no es el flujo real.
+   *
+   * Solo funciona con los números declarados como de prueba, y se verifica
+   * acá y no en la pantalla: una dirección que borra mensajes y pedidos no
+   * puede quedar abierta porque el botón no se vea.
+   *
+   * POST /api/conversations/:id/reset
+   */
+  async reiniciarPrueba(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: 'ID de conversación inválido' });
+      }
+
+      const conv = await conversationRepository.findById(id);
+      if (!conv) {
+        return res.status(404).json({ error: 'Conversación no encontrada' });
+      }
+
+      // Mismo aislamiento que el resto de la bandeja: un operador no puede
+      // tocar un canal que no tiene asignado.
+      if (req.user.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (!assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
+      }
+
+      if (!esTelefonoDePrueba(conv.contact_phone)) {
+        return res.status(403).json({
+          error: 'Esta conversación no es de prueba. Reiniciar borra los mensajes y el pedido, así que solo se permite en los números cargados en TEST_PHONES.'
+        });
+      }
+
+      // Antes de borrar, cortar lo que esté esperando en la cola de respuesta:
+      // si no, el despacho pendiente sale igual unos segundos después y
+      // contesta sobre un chat que ya no existe.
+      const enEspera = automationService.cancelarCola(id);
+
+      const borrado = await conversationRepository.reiniciarParaPrueba(id);
+
+      socketManager.emitConversationUpdated(conv.channel_id, {
+        id,
+        last_message_text: null,
+        last_message_time: null,
+        unread_count: 0,
+        bot_status: 'active',
+        order_status: null,
+        order_id: null
+      });
+
+      return res.json({ success: true, ...borrado, enEspera });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al reiniciar la conversación: ' + error.message });
     }
   },
 
