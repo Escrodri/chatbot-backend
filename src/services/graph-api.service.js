@@ -370,7 +370,9 @@ export const graphApiService = {
     try {
       let fields = '';
       if (platform === 'facebook') {
-        fields = 'first_name,last_name,name,profile_pic';
+        // En Facebook Messenger (PSID), la API oficial expone first_name,last_name,profile_pic.
+        // Consultar el campo 'name' directamente en un PSID sin 'pages_read_engagement' produce el error (#100).
+        fields = 'first_name,last_name,profile_pic';
       } else if (platform === 'instagram') {
         fields = 'name,username,profile_pic';
       } else {
@@ -388,7 +390,9 @@ export const graphApiService = {
 
       let name = null;
       if (platform === 'facebook') {
-        name = data.name || (data.first_name ? `${data.first_name} ${data.last_name || ''}`.trim() : null);
+        name = (data.first_name || data.last_name)
+          ? `${data.first_name || ''} ${data.last_name || ''}`.trim()
+          : (data.name || null);
       } else if (platform === 'instagram') {
         name = data.name || (data.username ? `@${data.username}` : null);
       }

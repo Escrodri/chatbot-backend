@@ -253,7 +253,10 @@ export const settingsController = {
       }
 
       if (!metaData) {
-        const errMsg = lastError?.message || 'Error al validar canal con Meta Graph API';
+        let errMsg = lastError?.message || 'Error al validar canal con Meta Graph API';
+        if (lastError?.code === 100 || (typeof errMsg === 'string' && errMsg.includes('pages_read_engagement'))) {
+          errMsg = `Meta denegó la consulta (Error #100): Verifica que el token sea un Page Access Token válido y que cuente con los permisos 'pages_show_list', 'pages_messaging' y 'pages_read_engagement'.`;
+        }
         await channelRepository.updateStatus(id, 'error', errMsg);
         return res.status(400).json({
           success: false,
@@ -495,14 +498,27 @@ export const settingsController = {
     }
 
     // 3a. Traer las páginas asociadas directamente al perfil (/me/accounts)
+    // IMPORTANTE: NUNCA solicitar 'category' ni campos de Page Public Metadata Access porque
+    // disparan el error (#100) si el token no cuenta con 'pages_read_engagement' aprobado por Meta.
     const rawPages = [];
     let accountsError = null;
 
     try {
-      const accountsRes = await fetch(
-        `https://graph.facebook.com/${apiVersion}/me/accounts?fields=id,name,category,access_token,instagram_business_account{id,username,name}&access_token=${effectiveToken}`
+      // Intento 1: consultar páginas e info básica de Instagram
+      let accountsRes = await fetch(
+        `https://graph.facebook.com/${apiVersion}/me/accounts?fields=id,name,access_token,instagram_business_account{id,username}&access_token=${effectiveToken}`
       );
-      const accountsData = await accountsRes.json();
+      let accountsData = await accountsRes.json();
+
+      // Si falla (por ejemplo por restricción de Instagram o error 100), reintentar de forma segura solo páginas
+      if (!accountsRes.ok || accountsData.error) {
+        console.warn('⚠️ [SCAN PAGES] Intento con Instagram falló, reintentando solo con campos básicos de páginas:', accountsData.error?.message);
+        accountsRes = await fetch(
+          `https://graph.facebook.com/${apiVersion}/me/accounts?fields=id,name,access_token&access_token=${effectiveToken}`
+        );
+        accountsData = await accountsRes.json();
+      }
+
       if (accountsRes.ok && Array.isArray(accountsData.data)) {
         rawPages.push(...accountsData.data);
       } else if (accountsData.error) {
@@ -515,11 +531,20 @@ export const settingsController = {
 
     // 3b. Consultar también los Business Managers del usuario (/me/businesses)
     try {
-      const bizRes = await fetch(
-        `https://graph.facebook.com/${apiVersion}/me/businesses?fields=id,name,owned_pages{id,name,category,access_token,instagram_business_account{id,username,name}},client_pages{id,name,category,access_token,instagram_business_account{id,username,name}}&access_token=${effectiveToken}`
+      let bizRes = await fetch(
+        `https://graph.facebook.com/${apiVersion}/me/businesses?fields=id,name,owned_pages{id,name,access_token,instagram_business_account{id,username}},client_pages{id,name,access_token,instagram_business_account{id,username}}&access_token=${effectiveToken}`
       );
-      if (bizRes.ok) {
-        const bizData = await bizRes.json();
+      let bizData = await bizRes.json();
+
+      // Si falla por campos anidados de Instagram, reintentar solo con páginas del Business
+      if (!bizRes.ok || bizData.error) {
+        bizRes = await fetch(
+          `https://graph.facebook.com/${apiVersion}/me/businesses?fields=id,name,owned_pages{id,name,access_token},client_pages{id,name,access_token}&access_token=${effectiveToken}`
+        );
+        bizData = await bizRes.json();
+      }
+
+      if (bizRes.ok && Array.isArray(bizData.data)) {
         const businesses = bizData.data || [];
         for (const biz of businesses) {
           const owned = biz.owned_pages?.data || [];
@@ -537,8 +562,12 @@ export const settingsController = {
     }
 
     if (rawPages.length === 0 && accountsError) {
+      let friendlyError = accountsError.message || 'Error al comunicarse con Meta Graph API';
+      if (accountsError.code === 100 || (typeof friendlyError === 'string' && friendlyError.includes('pages_read_engagement'))) {
+        friendlyError = `Meta denegó la lectura de páginas (Error #100): El token no cuenta con los permisos necesarios o tu App de Meta está en modo 'Desarrollo'. Asegúrate de incluir los permisos 'pages_show_list', 'pages_messaging' y 'pages_read_engagement', y que tu usuario tenga rol de Administrador o Evaluador (Tester) en la App de Meta Developers.`;
+      }
       return {
-        error: `Meta Graph API error: ${accountsError.message || 'Error al comunicarse con Meta Graph API'}`,
+        error: friendlyError,
         metaError: accountsError
       };
     }
@@ -582,7 +611,7 @@ export const settingsController = {
       })
     );
 
-    const recommended = ['pages_show_list', 'pages_messaging', 'pages_manage_metadata', 'business_management'];
+    const recommended = ['pages_show_list', 'pages_messaging', 'pages_manage_metadata', 'pages_read_engagement', 'business_management'];
     const missingRecommended = recommended.filter(p => !grantedPermissions.includes(p));
 
     return {
@@ -958,8 +987,8 @@ export const settingsController = {
 
       // 2. Consultar /me/accounts (páginas administradas por el usuario con cuentas de Instagram vinculadas)
       try {
-        const accRes = await fetch(`https://graph.facebook.com/${apiVersion}/me/accounts?fields=id,name,category,access_token,instagram_business_account{id,username,name}&access_token=${token}`);
-        const accData = await accRes.json();
+        let accRes = await fetch(`https://graph.facebook.com/${apiVersion}/me/accounts?fields=id,name,access_token,instagram_business_account{id,username}&access_token=${token}`);
+        let accData = await accRes.json();
 
         if (accRes.ok && Array.isArray(accData.data)) {
           for (const page of accData.data) {
@@ -968,8 +997,8 @@ export const settingsController = {
                 success: true,
                 account: {
                   id: page.instagram_business_account.id,
-                  username: page.instagram_business_account.username || page.instagram_business_account.name,
-                  name: page.instagram_business_account.name || page.instagram_business_account.username,
+                  username: page.instagram_business_account.username || page.name,
+                  name: page.instagram_business_account.username || page.name,
                   pageAccessToken: page.access_token || null,
                   source: `Vinculada a la página "${page.name}"`
                 }
