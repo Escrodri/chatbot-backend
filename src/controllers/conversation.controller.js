@@ -655,7 +655,7 @@ export const conversationController = {
   async toggleBot(req, res) {
     try {
       const id = parseInt(req.params.id, 10);
-      const { botStatus } = req.body;
+      const { botStatus } = req.body || {};
 
       if (isNaN(id)) {
         return res.status(400).json({ error: 'ID de conversación inválido' });
@@ -670,15 +670,30 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      await conversationRepository.updateBotStatus(id, botStatus, req.user.id);
+      // Verificación IDOR para operadores con rol agent
+      if (req.user?.role === 'agent') {
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (assigned && assigned.length > 0 && !assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
+      }
 
-      socketManager.emitConversationUpdated(conv.channel_id, {
-        id,
-        bot_status: botStatus
-      });
+      const userId = req.user?.id ? Number(req.user.id) : null;
+      await conversationRepository.updateBotStatus(id, botStatus, userId);
+
+      try {
+        await socketManager.emitConversationUpdated(conv.channel_id, {
+          id,
+          bot_status: botStatus
+        });
+        await socketManager.emitBotStatus(conv.channel_id, id, botStatus);
+      } catch (sockErr) {
+        console.warn('⚠️ [SOCKET] No se pudo emitir cambio de bot_status:', sockErr.message);
+      }
 
       return res.json({ success: true, botStatus });
     } catch (error) {
+      console.error('❌ [BOT-TOGGLE] Error al cambiar estado del bot:', error);
       return res.status(500).json({ error: 'Error al cambiar estado del bot: ' + error.message });
     }
   },

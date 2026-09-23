@@ -157,17 +157,22 @@ export const conversationRepository = {
    * @returns {Promise<void>}
    */
   async updateBotStatus(conversationId, botStatus, assignedUserId = null) {
+    const validUserId = Number.isInteger(Number(assignedUserId)) ? Number(assignedUserId) : null;
     await query(
       `UPDATE conversations
        SET bot_status = $1,
-           assigned_user_id = COALESCE($2, assigned_user_id),
+           assigned_user_id = CASE
+             WHEN $1 = 'active' THEN NULL
+             WHEN $2::integer IS NOT NULL AND EXISTS(SELECT 1 FROM users WHERE id = $2::integer) THEN $2::integer
+             ELSE assigned_user_id
+           END,
            -- Se pisa cada vez que el chat pasa (o vuelve a pasar) a manos de
            -- una persona, así que no marca cuándo empezó el handover sino
            -- cuándo fue la última señal de vida del equipo. Es lo que hay que
            -- medir para saber si un chat quedó abandonado.
            handed_over_at = CASE WHEN $1 = 'handed_over' THEN CURRENT_TIMESTAMP ELSE NULL END
        WHERE id = $3`,
-      [botStatus, assignedUserId, conversationId]
+      [botStatus, validUserId, conversationId]
     );
   },
 
