@@ -245,10 +245,20 @@ function encolar({ conversation, contact, channel, message }) {
 
   if (grupo.timer) clearTimeout(grupo.timer);
 
-  // Una imagen no se hace esperar. Quien manda un comprobante quiere una
-  // respuesta ya, y además no hay razón para pensar que va a seguir escribiendo.
+  // Dos cosas no se hacen esperar.
+  //
+  // Una imagen: quien manda un comprobante quiere respuesta ya, y no hay razón
+  // para pensar que va a seguir escribiendo.
+  //
+  // Y un botón. La espera existe para juntar a alguien que escribe de a
+  // pedacitos —"hola", enter, "queria consultar", enter—, y quien toca un
+  // botón ya dijo todo lo que tenía que decir de una sola vez. Hacerlo esperar
+  // no lo hace más humano, lo hace más lento: del otro lado se ve un botón
+  // tocado y una pantalla que no reacciona.
   const esTexto = (message.content_type || 'text') === 'text';
-  if (!esTexto) {
+  const esBoton = Boolean(message.boton_id);
+
+  if (!esTexto || esBoton) {
     enCola.delete(clave);
     automationService.despachar(grupo).catch(err => {
       console.error('❌ [AUTOMATION] Falló el despacho inmediato:', err.message);
