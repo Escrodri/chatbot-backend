@@ -615,6 +615,11 @@ export const orderController = {
         cuenta = null,
         titular = null,
         operacion = null,
+        // Fecha y hora de la operación. Con ellas se arma la huella que
+        // reemplaza al número de operación en los comprobantes que no lo
+        // muestran, que en Paraguay son la mayoría.
+        fecha = null,
+        hora = null,
         receipt_message_id = null
       } = req.body || {};
 

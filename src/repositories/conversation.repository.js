@@ -158,14 +158,26 @@ export const conversationRepository = {
    */
   async updateBotStatus(conversationId, botStatus, assignedUserId = null) {
     await query(
+      // El tipo de $1 va escrito a mano, y no es un detalle.
+      //
+      // El mismo parámetro se usa en dos lugares: asignado a `bot_status`, que
+      // es VARCHAR, y comparado contra un literal, que Postgres toma como
+      // TEXT. Sin el casteo no puede deducir un único tipo para $1 y rechaza
+      // la consulta entera con "inconsistent types deduced for parameter $1".
+      //
+      // O sea: fallaba SIEMPRE, desde que se agregó `handed_over_at`. Con eso
+      // roto no andaba el botón de pausar el bot, ni el pase a una persona
+      // después de entregar, ni el corte cuando un asesor contesta. Y como el
+      // error salía por consola y la petición seguía, desde la pantalla no se
+      // veía nada.
       `UPDATE conversations
-       SET bot_status = $1,
+       SET bot_status = $1::varchar,
            assigned_user_id = COALESCE($2, assigned_user_id),
            -- Se pisa cada vez que el chat pasa (o vuelve a pasar) a manos de
            -- una persona, así que no marca cuándo empezó el handover sino
            -- cuándo fue la última señal de vida del equipo. Es lo que hay que
            -- medir para saber si un chat quedó abandonado.
-           handed_over_at = CASE WHEN $1 = 'handed_over' THEN CURRENT_TIMESTAMP ELSE NULL END
+           handed_over_at = CASE WHEN $1::varchar = 'handed_over' THEN CURRENT_TIMESTAMP ELSE NULL END
        WHERE id = $3`,
       [botStatus, assignedUserId, conversationId]
     );
