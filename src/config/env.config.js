@@ -203,6 +203,58 @@ export const envConfig = Object.freeze({
     desdeHora: parseInt(process.env.ENTREGA_AUTO_DESDE || '21', 10),
     hastaHora: parseInt(process.env.ENTREGA_AUTO_HASTA || '8', 10),
     montoMaximo: parseInt(process.env.ENTREGA_AUTO_MONTO_MAX || '50000', 10),
+
+    // Cuántas entregas puede hacer el sistema solo en un día.
+    //
+    // Es la red que atrapa lo que ningún control individual puede ver: que
+    // todos los comprobantes estén pasando. Si la lectura empieza a fallar de
+    // forma sistemática —un banco nuevo cuyo formato confunde al modelo, una
+    // captura que alguien descubrió que pasa siempre—, cada aprobación por
+    // separado se ve perfecta y el problema recién se nota al contar.
+    //
+    // Llegado al tope no se rechaza nada: se manda a revisión humana, que es
+    // lo que habría pasado si esto no existiera. Lo único que se pierde es la
+    // inmediatez, y solo a partir del pedido número quince de un mismo día.
+    maxPorDia: parseInt(process.env.ENTREGA_AUTO_MAX_DIA || '15', 10),
+  },
+
+  // Recuperación de abandonos: volver a escribirle al que se quedó a mitad.
+  //
+  // La gran mayoría de las conversaciones no terminan en "no": terminan en
+  // nada. La persona mira el precio, dice que lo va a pensar, y se va. Nadie
+  // vuelve solo. Insistir una vez es lo que separa una conversación perdida de
+  // una venta, y es gratis mientras siga abierta la ventana de 24 horas de
+  // Meta.
+  //
+  // Tres escalones y se termina. El cuarto mensaje ya no recupera a nadie: lo
+  // único que consigue es que reporten el número, y un número reportado no
+  // vende más nunca. La escalera se corta sola.
+  //
+  // `silencioDesde`/`silencioHasta` son horas de Paraguay: un recordatorio a
+  // las tres de la mañana despierta a alguien para ofrecerle un PDF, y eso no
+  // se perdona. Lo que cae en esa franja espera a la mañana, y si a la mañana
+  // ya se venció la ventana gratuita, se descarta: no vale pagar una plantilla
+  // de Gs. 300 a 900 por insistirle a alguien que se fue hace un día.
+  recuperacion: {
+    habilitada: (process.env.RECUPERACION_ACTIVA || 'true').trim().toLowerCase() !== 'false',
+
+    // Cada cuánto se revisa quién quedó a mitad de camino.
+    cadaMinutos: parseInt(process.env.RECUPERACION_CADA_MIN || '15', 10),
+
+    // Los tres escalones, en minutos desde el último movimiento de la persona.
+    escalones: Object.freeze([
+      parseInt(process.env.RECUPERACION_PASO_1 || '120', 10),
+      parseInt(process.env.RECUPERACION_PASO_2 || '480', 10),
+      parseInt(process.env.RECUPERACION_PASO_3 || '1200', 10),
+    ]),
+
+    silencioDesde: parseInt(process.env.RECUPERACION_SILENCIO_DESDE || '21', 10),
+    silencioHasta: parseInt(process.env.RECUPERACION_SILENCIO_HASTA || '8', 10),
+
+    // Cuántos mensajes de recuperación se permiten por pasada. Es un freno,
+    // no una cuota: si un día entran mil conversaciones, mandarlas todas de
+    // golpe se ve como un envío masivo y Meta lo trata como tal.
+    maxPorPasada: parseInt(process.env.RECUPERACION_MAX_POR_PASADA || '40', 10),
   },
 
   // Números con los que se prueba el flujo.
@@ -274,7 +326,7 @@ export function esTelefonoDePrueba(telefono) {
  * @returns {number}
  */
 export function horaEnParaguay(fecha = new Date()) {
-  return parseInt(
+  const crudo = parseInt(
     new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/Asuncion',
       hour: '2-digit',
@@ -282,6 +334,29 @@ export function horaEnParaguay(fecha = new Date()) {
     }).format(fecha),
     10
   );
+
+  // `hour12: false` en en-US devuelve 24 a la medianoche, no 0. Para el rango
+  // nocturno da lo mismo, pero cualquier cuenta que reste horas se va un día
+  // entero de largo justo en el borde.
+  return Number.isFinite(crudo) ? crudo % 24 : 12;
+}
+
+/** Hora y minuto en Paraguay, para las cuentas que no toleran redondeo. */
+function relojParaguay(fecha = new Date()) {
+  const partes = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Asuncion',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(fecha);
+
+  const leer = (tipo, porDefecto) => {
+    const p = partes.find(x => x.type === tipo);
+    const n = p ? parseInt(p.value, 10) : NaN;
+    return Number.isFinite(n) ? n : porDefecto;
+  };
+
+  return { hora: leer('hour', 12) % 24, minuto: leer('minute', 0) };
 }
 
 /**
@@ -299,6 +374,47 @@ export function esHorarioNocturno(fecha = new Date()) {
   return desdeHora > hastaHora
     ? (h >= desdeHora || h < hastaHora)
     : (h >= desdeHora && h < hastaHora);
+}
+
+/**
+ * ¿Es hora de no escribirle a nadie?
+ *
+ * Es la misma franja de la entrega automática de madrugada pero al revés de
+ * propósito: de noche el bot *entrega* solo, porque quien pagó está esperando
+ * despierto; de noche el bot *no insiste*, porque quien no compró está
+ * durmiendo. Son dos decisiones distintas sobre la misma franja horaria y por
+ * eso cada una tiene su propia configuración.
+ *
+ * @param {Date} [fecha]
+ * @returns {boolean}
+ */
+export function enHorarioDeSilencio(fecha = new Date()) {
+  const h = horaEnParaguay(fecha);
+  const { silencioDesde, silencioHasta } = envConfig.recuperacion;
+
+  return silencioDesde > silencioHasta
+    ? (h >= silencioDesde || h < silencioHasta)
+    : (h >= silencioDesde && h < silencioHasta);
+}
+
+/**
+ * El próximo momento en que se puede volver a escribir.
+ *
+ * Si ya se puede, devuelve la misma fecha. Si estamos en la franja de
+ * silencio, devuelve la hora de apertura más cercana.
+ *
+ * @param {Date} [fecha]
+ * @returns {Date}
+ */
+export function proximoHorarioParaEscribir(fecha = new Date()) {
+  if (!enHorarioDeSilencio(fecha)) return fecha;
+
+  const { hora, minuto } = relojParaguay(fecha);
+  const objetivo = envConfig.recuperacion.silencioHasta * 60;
+  let faltan = objetivo - (hora * 60 + minuto);
+  if (faltan <= 0) faltan += 24 * 60;
+
+  return new Date(fecha.getTime() + faltan * 60000);
 }
 
 export default envConfig;

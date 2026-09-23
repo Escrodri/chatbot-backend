@@ -10,3 +10,4 @@ export { productRepository } from './product.repository.js';
 export { orderRepository } from './order.repository.js';
 export { tagRepository } from './tag.repository.js';
 export { teamRepository } from './team.repository.js';
+export { settingRepository } from './setting.repository.js';

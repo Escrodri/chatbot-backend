@@ -655,7 +655,7 @@ export const conversationController = {
   async toggleBot(req, res) {
     try {
       const id = parseInt(req.params.id, 10);
-      const { botStatus } = req.body || {};
+      const { botStatus } = req.body;
 
       if (isNaN(id)) {
         return res.status(400).json({ error: 'ID de conversación inválido' });
@@ -670,30 +670,15 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      // Verificación IDOR para operadores con rol agent
-      if (req.user?.role === 'agent') {
-        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
-        if (assigned && assigned.length > 0 && !assigned.includes(conv.channel_id)) {
-          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
-        }
-      }
+      await conversationRepository.updateBotStatus(id, botStatus, req.user.id);
 
-      const userId = req.user?.id ? Number(req.user.id) : null;
-      await conversationRepository.updateBotStatus(id, botStatus, userId);
-
-      try {
-        await socketManager.emitConversationUpdated(conv.channel_id, {
-          id,
-          bot_status: botStatus
-        });
-        await socketManager.emitBotStatus(conv.channel_id, id, botStatus);
-      } catch (sockErr) {
-        console.warn('⚠️ [SOCKET] No se pudo emitir cambio de bot_status:', sockErr.message);
-      }
+      socketManager.emitConversationUpdated(conv.channel_id, {
+        id,
+        bot_status: botStatus
+      });
 
       return res.json({ success: true, botStatus });
     } catch (error) {
-      console.error('❌ [BOT-TOGGLE] Error al cambiar estado del bot:', error);
       return res.status(500).json({ error: 'Error al cambiar estado del bot: ' + error.message });
     }
   },
@@ -760,6 +745,45 @@ export const conversationController = {
       return res.json({ success: true, ...borrado, enEspera });
     } catch (error) {
       return res.status(500).json({ error: 'Error al reiniciar la conversación: ' + error.message });
+    }
+  },
+
+  /**
+   * Marca que esta persona se enojó, o nos trató de estafadores.
+   *
+   * Lo llama el guion cuando reconoce un insulto o una acusación. No cambia el
+   * estado del bot a propósito: el guion le contesta igual, y contestarle bien
+   * es lo único que puede dar vuelta un chat así. Callarse y pasárselo a
+   * alguien que va a tardar horas en mirarlo es lo que convierte un enojo en
+   * una reseña.
+   *
+   * Lo que sí hace son dos cosas que en el momento no se ven: deja el chat
+   * marcado en la bandeja, y lo saca para siempre de la recuperación de
+   * abandonos. Un seguimiento automático dos horas después de un insulto no
+   * recupera a nadie; confirma lo que la persona acaba de decir.
+   *
+   * POST /api/conversations/:id/molesto
+   */
+  async marcarMolesto(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'ID de conversación inválido' });
+
+      const conv = await conversationRepository.findById(id);
+      if (!conv) return res.status(404).json({ error: 'Conversación no encontrada' });
+
+      const cuando = await conversationRepository.marcarMolesto(id);
+
+      console.warn(
+        `😠 [MOLESTO] Conversación #${id} (${conv.contact_name || conv.contact_phone || 'sin nombre'}) ` +
+        'quedó marcada: sale de la recuperación de abandonos y conviene mirarla.'
+      );
+
+      socketManager.emitConversationUpdated(conv.channel_id, { id, molesto_at: cuando });
+
+      return res.json({ success: true, molesto_at: cuando });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al marcar la conversación: ' + error.message });
     }
   },
 

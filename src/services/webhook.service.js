@@ -2,10 +2,54 @@ import { channelRepository, contactRepository, conversationRepository, messageRe
 import { normalizerService } from './normalizer.service.js';
 import { socketManager } from '../sockets/index.js';
 import { botService } from './bot.service.js';
-import { automationService } from './automation.service.js';
+import { automationService, alAvisarAveria } from './automation.service.js';
 import { mediaService } from './media.service.js';
 import { graphApiService } from './graph-api.service.js';
 import { pool } from '../database/pool.js';
+
+/**
+ * Cuando n8n no contesta, que se note en la bandeja.
+ *
+ * El aviso se registra y se emite desde acá, pero lo dispara el propio
+ * servicio de automatización en el momento en que la llamada falla.
+ *
+ * Antes esto se decidía mirando lo que devolvía `reenviarMensajeEntrante`, y
+ * dejó de funcionar el día que se agregó la cola de espera: desde entonces esa
+ * función ya no hace el POST a n8n —contesta "en cola" y el envío ocurre ocho
+ * segundos más tarde—, así que ninguna avería llegaba nunca al que miraba. Con
+ * n8n caído, el cliente escribía, nadie le contestaba, y la bandeja no decía
+ * absolutamente nada: el silencio se veía igual que una conversación normal.
+ */
+alAvisarAveria(async (salida) => {
+  try {
+    const conv = salida.conversationId
+      ? await conversationRepository.findById(salida.conversationId)
+      : null;
+    if (!conv) return;
+
+    await logRepository.logEvent({
+      platform: 'automation',
+      channelIdentifier: String(conv.channel_id),
+      eventType: 'automation_unreachable',
+      rawPayload: {
+        conversationId: conv.id,
+        motivo: salida.motivo,
+        detalle: salida.detalle
+      },
+      status: 'ERROR'
+    });
+
+    socketManager.emitAutomationAlert(conv.channel_id, {
+      conversationId: conv.id,
+      motivo: salida.motivo,
+      mensaje: salida.mensaje,
+      detalle: salida.detalle,
+      en: salida.en
+    });
+  } catch (err) {
+    console.warn('⚠️ [AUTOMATION] No se pudo registrar el aviso de avería:', err.message);
+  }
+});
 
 /**
  * Servicio de Ingesta y Procesamiento de Webhooks:
@@ -308,41 +352,16 @@ export const webhookService = {
 
         if (automationService.estaActiva()) {
           try {
-            const reenvio = await automationService.reenviarMensajeEntrante({
+            // El aviso de avería ya no se decide con lo que devuelve esta
+            // llamada: lo dispara el propio servicio en el momento en que la
+            // llamada a n8n falla, que con la cola de espera ocurre segundos
+            // después de que esto haya terminado. Ver `alAvisarAveria`, arriba.
+            await automationService.reenviarMensajeEntrante({
               conversation,
               contact,
               channel,
               message: insertedMessage
             });
-
-            // Si n8n no pudo atender, nadie le contesta al cliente. El mensaje
-            // ya quedó guardado y visible en la bandeja, pero sin este registro
-            // el silencio parece normal. Queda anotado en la tabla de eventos y
-            // en la memoria del servicio, de donde lo lee el aviso de la bandeja.
-            //
-            // Solo entran acá las averías: que un asesor tenga tomado el chat no
-            // es una falla y no tiene que encender ninguna alarma.
-            if (reenvio.avisar) {
-              await logRepository.logEvent({
-                platform: event.platform,
-                channelIdentifier: event.channelIdentifier,
-                eventType: 'automation_unreachable',
-                rawPayload: {
-                  conversationId: conversation.id,
-                  motivo: reenvio.motivo,
-                  detalle: reenvio.detalle
-                },
-                status: 'ERROR'
-              });
-
-              socketManager.emitAutomationAlert(channel.id, {
-                conversationId: conversation.id,
-                motivo: reenvio.motivo,
-                mensaje: reenvio.mensaje,
-                detalle: reenvio.detalle,
-                en: reenvio.en
-              });
-            }
           } catch (autoErr) {
             console.error(`❌ [AUTOMATION ERROR] Error al reenviar a n8n:`, autoErr);
           }

@@ -3,6 +3,46 @@
  * Transforma payloads heterogéneos de WhatsApp Cloud API, Facebook Messenger e Instagram Direct
  * en objetos de evento canónicos unificados e inmutables para el sistema.
  */
+/**
+ * Los únicos tipos de contenido que la base acepta.
+ *
+ * La columna `messages.content_type` tiene un CHECK con esta misma lista. Antes
+ * se guardaba directamente el `type` que manda Meta, y Messenger manda además
+ * `file`, `fallback`, `template` y `location`: cualquiera de esos hacía fallar
+ * la inserción con un 23514 y el mensaje del cliente se perdía entero, sin
+ * aparecer en la bandeja ni en ningún lado.
+ */
+const TIPOS_ACEPTADOS = new Set(['text', 'image', 'sticker', 'audio', 'video', 'document']);
+
+/**
+ * Qué clase de adjunto mandó una persona por Messenger o Instagram.
+ *
+ * Meta no marca los stickers con un tipo propio en estas dos plataformas: los
+ * manda como `image` y el sticker se reconoce por venir con `sticker_id`, o por
+ * la dirección del archivo. Sin esa distinción, un sticker entraba al sistema
+ * como una imagen, y una imagen en esta conversación significa una cosa muy
+ * concreta: un comprobante de pago. El bot le corría la lectura de comprobante
+ * a un dibujito.
+ *
+ * @param {object} att Un adjunto tal como lo manda Meta
+ * @returns {string} Un tipo de los que acepta la base
+ */
+function tipoDeAdjuntoMeta(att) {
+  const tipo = String(att?.type || '').toLowerCase();
+  const url = String(att?.payload?.url || '');
+
+  if (att?.payload?.sticker_id || tipo === 'sticker') return 'sticker';
+  if (tipo === 'image' && /sticker/i.test(url)) return 'sticker';
+
+  if (TIPOS_ACEPTADOS.has(tipo)) return tipo;
+
+  // `file` es como Messenger llama a lo que acá es un documento. Lo demás
+  // —`fallback`, `template`, `location`— no tiene un equivalente y se guarda
+  // como texto, que es lo único que no rompe nada.
+  if (tipo === 'file') return 'document';
+  return 'text';
+}
+
 export const normalizerService = {
   /**
    * Normaliza un payload crudo de Meta Webhook en una lista de eventos estandarizados.
@@ -189,10 +229,18 @@ export const normalizerService = {
 
             if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
               const att = msg.attachments[0];
-              contentType = att.type || 'image';
               mediaUrl = att.payload?.url || null;
+              contentType = tipoDeAdjuntoMeta(att);
+
               if (!textContent) {
-                textContent = contentType === 'audio' ? '🎵 [Audio]' : `📎 [${contentType}]`;
+                const relleno = {
+                  audio: '🎵 [Audio]',
+                  sticker: '🏷️ [Sticker]',
+                  image: '📷 [Imagen]',
+                  video: '🎥 [Video]',
+                  document: '📄 [Archivo]'
+                };
+                textContent = relleno[contentType] || `📎 [${att.type || 'adjunto'}]`;
               }
             }
 

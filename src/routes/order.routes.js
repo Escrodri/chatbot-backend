@@ -14,6 +14,12 @@ orderRouter.get('/summary', requireAuth, orderController.summary);
 // escribe. Va antes de /:id para que "embudo" no se lea como un id.
 orderRouter.get('/embudo', requireAuth, orderController.embudo);
 
+// El interruptor de "salgo un rato, que apruebe solo": modo noche, siempre o
+// apagado, con vencimiento opcional. Va antes de /:id por la misma razón que
+// el embudo: si no, "revision-config" se leería como un id de pedido.
+orderRouter.get('/revision-config', requireAuth, orderController.configRevision);
+orderRouter.patch('/revision-config', requireAuth, orderController.cambiarConfigRevision);
+
 // Abrir/recuperar pedido. Lo llama n8n: la respuesta trae `duplicado` y
 // `ya_pago`, que es el "buscar duplicado" del flujo viejo resuelto de una.
 orderRouter.post('/', requireAuthOrService, orderController.createOrGet);

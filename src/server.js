@@ -4,6 +4,7 @@ import { config } from './config/index.js';
 import { socketManager } from './sockets/index.js';
 import { initDatabase } from './database/index.js';
 import { logRepository } from './repositories/log.repository.js';
+import { recoveryService } from './services/recovery.service.js';
 
 const server = http.createServer(app);
 
@@ -50,6 +51,15 @@ server.listen(config.port, () => {
   const limpieza = setInterval(limpiarRegistros, 24 * 60 * 60 * 1000);
   // Que el temporizador no sea razón para que el proceso no pueda terminar.
   if (typeof limpieza.unref === 'function') limpieza.unref();
+
+  // Recuperación de abandonos. Si falla al arrancar, el servidor sigue
+  // atendiendo: dejar de insistirle a los que se fueron es perder ventas, no
+  // dejar de vender.
+  try {
+    recoveryService.iniciar();
+  } catch (err) {
+    console.warn('⚠️ [RECUPERACION] No se pudo iniciar el ciclo:', err.message);
+  }
 });
 
 // Manejo de apagado elegante (Graceful Shutdown)

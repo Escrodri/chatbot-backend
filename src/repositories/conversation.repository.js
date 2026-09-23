@@ -157,38 +157,42 @@ export const conversationRepository = {
    * @returns {Promise<void>}
    */
   async updateBotStatus(conversationId, botStatus, assignedUserId = null) {
-    const validUserId = Number.isInteger(Number(assignedUserId)) ? Number(assignedUserId) : null;
+    await query(
+      `UPDATE conversations
+       SET bot_status = $1,
+           assigned_user_id = COALESCE($2, assigned_user_id),
+           -- Se pisa cada vez que el chat pasa (o vuelve a pasar) a manos de
+           -- una persona, así que no marca cuándo empezó el handover sino
+           -- cuándo fue la última señal de vida del equipo. Es lo que hay que
+           -- medir para saber si un chat quedó abandonado.
+           handed_over_at = CASE WHEN $1 = 'handed_over' THEN CURRENT_TIMESTAMP ELSE NULL END
+       WHERE id = $3`,
+      [botStatus, assignedUserId, conversationId]
+    );
+  },
 
-    if (botStatus === 'active') {
-      await query(
-        `UPDATE conversations
-         SET bot_status = 'active',
-             assigned_user_id = NULL,
-             handed_over_at = NULL
-         WHERE id = $1`,
-        [conversationId]
-      );
-    } else if (botStatus === 'handed_over') {
-      await query(
-        `UPDATE conversations
-         SET bot_status = 'handed_over',
-             assigned_user_id = CASE
-               WHEN $1::integer IS NOT NULL AND EXISTS(SELECT 1 FROM users WHERE id = $1::integer) THEN $1::integer
-               ELSE assigned_user_id
-             END,
-             handed_over_at = CURRENT_TIMESTAMP
-         WHERE id = $2`,
-        [validUserId, conversationId]
-      );
-    } else {
-      await query(
-        `UPDATE conversations
-         SET bot_status = $1,
-             handed_over_at = NULL
-         WHERE id = $2`,
-        [botStatus, conversationId]
-      );
-    }
+  /**
+   * Deja anotado que esta persona se enojó, o nos trató de estafadores.
+   *
+   * No cambia el estado del bot ni corta nada: el guion le contesta igual, y
+   * bien, que es lo único que puede dar vuelta un chat así. Lo que hace es que
+   * quede marcado en la bandeja para que se lo mire, y que la recuperación de
+   * abandonos no lo toque nunca más.
+   *
+   * La fecha se pisa en cada enojo nuevo a propósito: lo que interesa es hace
+   * cuánto fue la última vez, no la primera.
+   *
+   * @param {number} conversationId
+   * @returns {Promise<Date|null>}
+   */
+  async marcarMolesto(conversationId) {
+    const { rows } = await query(
+      `UPDATE conversations SET molesto_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+        RETURNING id, molesto_at`,
+      [conversationId]
+    );
+    return rows[0]?.molesto_at || null;
   },
 
   /**
@@ -270,6 +274,9 @@ export const conversationRepository = {
         c.id, c.channel_id, c.contact_id, c.last_message_text, c.last_message_time,
         c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id,
         c.source_ad_id,
+        -- Si esta persona se enojó o nos trató de estafadores. La bandeja lo
+        -- marca para que se lo mire antes que a ningún otro chat.
+        c.molesto_at,
         ct.name as contact_name, ct.phone_or_username as contact_phone, ct.avatar_url as contact_avatar,
         -- Cuántas veces se intentó completar el perfil y cuándo fue la última.
         -- Sin estos dos campos, la bandeja le vuelve a preguntar a Meta por el

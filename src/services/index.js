@@ -7,3 +7,6 @@ export { mediaService } from './media.service.js';
 export { storageService } from './storage.service.js';
 export { conversionsService } from './conversions.service.js';
 export { automationService } from './automation.service.js';
+export { deliveryService } from './delivery.service.js';
+export { recoveryService } from './recovery.service.js';
+export { autoReviewService } from './auto-review.service.js';

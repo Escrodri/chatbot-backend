@@ -33,16 +33,32 @@ export const MOTIVOS = Object.freeze({
   APAGADA: 'apagada',
   SIN_URL: 'sin_url',
   BOT_PAUSADO: 'bot_pausado',
+  SIN_CONTENIDO: 'sin_contenido',
   HTTP: 'http',
   TIMEOUT: 'timeout',
   RED: 'red'
 });
+
+/**
+ * Tipos de mensaje que no dicen nada que el guion pueda contestar.
+ *
+ * Un sticker no es una pregunta. Llegaba igual que cualquier texto, con el
+ * relleno "[Sticker]" en lugar de las palabras, y como ninguna rama del guion
+ * lo reconocía terminaba en la última —la que vuelve a ofrecer el producto—.
+ * O sea: la persona manda un gatito y el bot le repite el precio. Nada delata
+ * más rápido que del otro lado no hay nadie leyendo.
+ *
+ * Callarse es la respuesta correcta. Si después escribe algo, ese mensaje sí
+ * entra y la conversación sigue donde estaba.
+ */
+const SIN_NADA_QUE_CONTESTAR = new Set(['sticker', 'reaction']);
 
 /** Texto para humanos de cada motivo. Lo usa el aviso de la bandeja. */
 const TEXTO = Object.freeze({
   [MOTIVOS.APAGADA]: 'La automatización está apagada: AUTOMATION_ENABLED no vale true.',
   [MOTIVOS.SIN_URL]: 'Falta configurar N8N_WEBHOOK_URL.',
   [MOTIVOS.BOT_PAUSADO]: 'Un asesor tomó la conversación, así que el bot no interviene.',
+  [MOTIVOS.SIN_CONTENIDO]: 'El mensaje no trae nada que el guion pueda contestar (un sticker, una reacción).',
   [MOTIVOS.HTTP]: 'n8n contestó con un código de error.',
   [MOTIVOS.TIMEOUT]: 'n8n no contestó a tiempo.',
   [MOTIVOS.RED]: 'No se pudo abrir la conexión con n8n.'
@@ -161,9 +177,44 @@ function resultado({ ok, motivo = null, detalle = null, conversationId = null })
   } else if (salida.avisar) {
     estado.ultimoFallo = salida;
     estado.fallosSeguidos += 1;
+
+    // El aviso se dispara desde acá y no desde quien llamó.
+    //
+    // Antes lo miraba `webhook.service` en el valor de retorno, y eso dejó de
+    // funcionar el día que se metió la cola de espera: desde entonces la
+    // función que atiende el webhook ya no hace el POST a n8n —devuelve "en
+    // cola" y el envío ocurre ocho segundos después, dentro de `despachar`,
+    // cuyo resultado no lo lee nadie—. Con n8n caído el cliente escribía,
+    // nadie le contestaba, y la bandeja no mostraba absolutamente nada.
+    //
+    // Los motivos que llegan acá son solo averías: una pausa deliberada del
+    // bot no enciende ninguna alarma.
+    if (typeof avisarDeAveria === 'function') {
+      try {
+        avisarDeAveria(salida);
+      } catch (err) {
+        console.warn('⚠️ [AUTOMATION] No se pudo emitir el aviso de avería:', err.message);
+      }
+    }
   }
 
   return salida;
+}
+
+/**
+ * A quién avisarle cuando n8n no contesta.
+ *
+ * Se inyecta desde afuera para que este servicio no tenga que conocer ni los
+ * sockets ni la tabla de registros, que es justo lo que lo volvería imposible
+ * de probar.
+ */
+let avisarDeAveria = null;
+
+/**
+ * @param {(salida: object) => void} fn
+ */
+export function alAvisarAveria(fn) {
+  avisarDeAveria = fn;
 }
 
 /**
@@ -468,6 +519,22 @@ export const automationService = {
     if (!config.automation?.webhookUrl) {
       console.warn('⚠️ [AUTOMATION] AUTOMATION_ENABLED=true pero N8N_WEBHOOK_URL está vacía.');
       return resultado({ ok: false, motivo: MOTIVOS.SIN_URL, conversationId: conversation?.id ?? null });
+    }
+
+    // Un sticker o una reacción no abren ninguna conversación: no hay nada que
+    // contestar, así que el guion ni se entera. Ver la nota de
+    // SIN_NADA_QUE_CONTESTAR, arriba.
+    if (SIN_NADA_QUE_CONTESTAR.has(message?.content_type)) {
+      console.info(
+        `ℹ️ [AUTOMATION] Conversación #${conversation.id}: llegó un ${message.content_type} ` +
+        'y no se reenvía a n8n. Contestar un sticker con el precio es peor que no contestar.'
+      );
+      return resultado({
+        ok: false,
+        motivo: MOTIVOS.SIN_CONTENIDO,
+        detalle: message.content_type,
+        conversationId: conversation.id
+      });
     }
 
     // El bot solo habla cuando la conversación está en su turno. Si un asesor

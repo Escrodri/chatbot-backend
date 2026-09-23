@@ -1,10 +1,11 @@
-import { orderRepository, ETAPAS, posicionEtapa } from '../repositories/order.repository.js';
+import { orderRepository, ETAPAS, posicionEtapa, soportaEquipos } from '../repositories/order.repository.js';
 import { productRepository } from '../repositories/product.repository.js';
 import { conversationRepository } from '../repositories/conversation.repository.js';
 import { deliveryService } from '../services/delivery.service.js';
 import { socketManager } from '../sockets/index.js';
-import { envConfig, esHorarioNocturno, horaEnParaguay } from '../config/env.config.js';
+import { envConfig, horaEnParaguay } from '../config/env.config.js';
 import { userRepository } from '../repositories/user.repository.js';
+import { autoReviewService } from '../services/auto-review.service.js';
 
 /**
  * ¿Este pedido es de quien lo está pidiendo?
@@ -21,13 +22,78 @@ import { userRepository } from '../repositories/user.repository.js';
  * @param {object|null} pedido Tiene que venir de `findConEntrega`, que resuelve canal y equipo
  * @returns {Promise<boolean>}
  */
+/**
+ * Un nombre partido en palabras comparables: sin tildes, sin puntuación y en
+ * minúsculas.
+ *
+ * Los bancos escriben el titular de cualquier manera —"RODRIGUEZ, E.",
+ * "Enmanuel R.", todo en mayúsculas, con o sin tildes—, así que comparar las
+ * cadenas enteras no sirve para nada. Lo que sobrevive a todas esas formas es
+ * el apellido, y para eso alcanza con ver si comparten alguna palabra larga.
+ *
+ * @param {string|null|undefined} valor
+ * @returns {string[]}
+ */
+/**
+ * El id de un mensaje de nuestra base, o null.
+ *
+ * Existe porque `Number()` convierte null, undefined y la cadena vacía en 0, y
+ * `Number.isInteger(0)` es verdadero. La guarda que había —"pasalo solo si es
+ * un entero"— dejaba pasar el cero, y cero no es ningún mensaje: la clave
+ * foránea contra `messages` hacía fallar el UPDATE justo en el momento de
+ * cobrar, con un error 23503 que nadie atrapaba.
+ *
+ * El guion no manda ese campo casi nunca, así que la entrega automática
+ * terminaba en 500 en el caso normal. El comprobante era bueno, el dinero
+ * estaba, y el cliente esperaba hasta la mañana igual.
+ *
+ * @param {*} valor
+ * @returns {number|null}
+ */
+function idDeMensaje(valor) {
+  if (valor === null || valor === undefined) return null;
+
+  const texto = String(valor).trim();
+  // Solo dígitos: el guion a veces manda el identificador de Meta ("wamid.…"),
+  // que no es un número de nuestra base.
+  if (!/^\d+$/.test(texto)) return null;
+
+  const numero = Number(texto);
+  return Number.isSafeInteger(numero) && numero > 0 ? numero : null;
+}
+
+function normalizarNombre(valor) {
+  return String(valor || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
 async function puedeTocar(req, pedido) {
   if (!pedido) return false;
 
   const rol = req.user?.role;
   if (rol === 'service' || rol === 'superadmin') return true;
 
-  if (req.user?.team_id && pedido.team_id && pedido.team_id !== req.user.team_id) {
+  // El equipo del pedido tiene que ser el de quien lo pide.
+  //
+  // Antes la comparación exigía que los dos lados tuvieran valor, y ahí se
+  // caía: `findConEntrega` devuelve `NULL::int AS team_id` en las bases donde
+  // la columna `channels.team_id` no existe, y también cuando el JOIN no
+  // resuelve. Con el equipo del pedido en nulo la condición daba falso y el
+  // chequeo se saltaba entero, así que un asesor sin canales asignados podía
+  // confirmar el pago de cualquier id y dispararle la entrega al cliente de
+  // otro negocio.
+  //
+  // Ahora se exige coincidencia. Pero solo donde los equipos existen de
+  // verdad: en una base sin `channels.team_id` TODOS los pedidos vienen con
+  // equipo nulo, y exigir coincidencia ahí dejaría al dueño sin poder abrir
+  // ni uno solo de sus propios pedidos. El aislamiento tiene que proteger,
+  // no tapiar la puerta.
+  if (req.user?.team_id && await soportaEquipos() && pedido.team_id !== req.user.team_id) {
     return false;
   }
 
@@ -258,8 +324,12 @@ export const orderController = {
           confirmedBy: esServicio ? null : req.user?.id || null,
           note,
           receiptCheck: receipt_check,
-          receiptMessageId: receipt_message_id ? parseInt(receipt_message_id, 10) : null,
-          receiptOperacion: operacion
+          receiptMessageId: idDeMensaje(receipt_message_id),
+          receiptOperacion: operacion,
+          // Solo si el pedido sigue en el estado que leímos hace un momento.
+          // Es lo que hace que dos clics rápidos entreguen una vez y no dos:
+          // ver `siEstadoEs` en el repositorio.
+          siEstadoEs: quiereEntrega ? conEntrega.status : null
         });
       } catch (err) {
         if (err.code === 'ERR_OPERACION_REPETIDA') {
@@ -269,6 +339,16 @@ export const orderController = {
           });
         }
         throw err;
+      }
+
+      // Sin fila actualizada y con la guarda puesta, el pedido cambió de estado
+      // entre que lo leímos y lo escribimos: otra petición ganó la carrera y ya
+      // hizo la entrega. Contestar 404 acá sería mentir.
+      if (!actualizado && quiereEntrega) {
+        return res.status(409).json({
+          error: 'Otro pedido de confirmación llegó primero y ya se está procesando. Actualizá la pantalla.',
+          code: 'ERR_CONFIRMACION_EN_CURSO'
+        });
       }
 
       if (!actualizado) return res.status(404).json({ error: 'Pedido no encontrado' });
@@ -375,6 +455,69 @@ export const orderController = {
   },
 
   /**
+   * Cómo está configurada la aprobación automática en este momento.
+   *
+   * GET /api/orders/revision-config
+   */
+  async configRevision(req, res) {
+    try {
+      const estado = await autoReviewService.estado();
+
+      return res.json({
+        ...estado,
+        modos: autoReviewService.MODOS,
+        // Para que la pantalla pueda explicar de qué franja habla sin tener
+        // que repetir el horario escrito a mano en otro lado.
+        franja_nocturna: {
+          desde: envConfig.entregaAutomatica.desdeHora,
+          hasta: envConfig.entregaAutomatica.hastaHora
+        },
+        monto_maximo: envConfig.entregaAutomatica.montoMaximo,
+        habilitada_en_servidor: envConfig.entregaAutomatica.habilitada,
+        max_por_dia: envConfig.entregaAutomatica.maxPorDia,
+        // Cuántas lleva hechas hoy. Es lo primero que uno quiere ver al volver
+        // de la calle, y lo que dice si el tope está por frenar la entrega.
+        entregadas_hoy: await orderRepository.autoAprobadosDelDia().catch(() => 0)
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al leer la configuración: ' + error.message });
+    }
+  },
+
+  /**
+   * Cambia el modo de aprobación automática.
+   *
+   * Solo administradores. No es un ajuste cosmético: decide si el sistema
+   * puede entregar material cobrando sin que lo mire una persona, y quien
+   * atiende chats no tiene por qué poder cambiar esa regla para todos.
+   *
+   * PATCH /api/orders/revision-config
+   */
+  async cambiarConfigRevision(req, res) {
+    try {
+      if (!['admin', 'superadmin'].includes(req.user?.role)) {
+        return res.status(403).json({ error: 'Solo un administrador puede cambiar esto.' });
+      }
+
+      const { modo, horas = null, hasta = null, nota = null } = req.body || {};
+
+      const estado = await autoReviewService.cambiar({ modo, horas, hasta, nota }, req.user.id);
+
+      console.log(
+        `⚙️ [REVISION AUTO] ${req.user.name || req.user.email || 'alguien'} puso el modo en "${estado.modo}"` +
+        `${estado.hasta ? ` hasta ${estado.hasta}` : ''}.`
+      );
+
+      return res.json({ ...estado, modos: autoReviewService.MODOS });
+    } catch (error) {
+      if (['ERR_MODO_INVALIDO', 'ERR_VENCIMIENTO_INVALIDO'].includes(error.code)) {
+        return res.status(400).json({ error: error.message });
+      }
+      return res.status(500).json({ error: 'Error al guardar la configuración: ' + error.message });
+    }
+  },
+
+  /**
    * Decide si un comprobante se puede aprobar y entregar sin que lo mire nadie.
    *
    * Existe por una sola razón: de madrugada no hay nadie revisando, y alguien
@@ -401,7 +544,13 @@ export const orderController = {
       const id = parseInt(req.params.id, 10);
       if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
 
-      const { monto = null, cuenta = null, operacion = null, receipt_message_id = null } = req.body || {};
+      const {
+        monto = null,
+        cuenta = null,
+        titular = null,
+        operacion = null,
+        receipt_message_id = null
+      } = req.body || {};
 
       const pedido = await orderRepository.findConEntrega(id);
       if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
@@ -410,17 +559,7 @@ export const orderController = {
         return res.status(404).json({ error: 'Pedido no encontrado' });
       }
 
-      // Guarda siempre el número de operación, aunque después no se entregue
-      // solo. Si no se guarda acá, el comprobante que revisa una persona a la
-      // mañana queda sin número registrado y esa misma captura sirve de nuevo
-      // la noche siguiente.
       const operacionLimpia = String(operacion || '').replace(/[^0-9]/g, '');
-      if (operacionLimpia) {
-        // Con su propio método y no pasando por `cambiarEstado`: esa función
-        // vuelve a sellar la fecha de cobro cada vez que el estado es 'pagado',
-        // así que anotar el número borraba quién había confirmado el pago.
-        await orderRepository.guardarOperacion(id, operacionLimpia);
-      }
 
       const rechazar = (motivo, detalle) => res.json({
         entregado: false,
@@ -429,16 +568,43 @@ export const orderController = {
         hora_paraguay: horaEnParaguay()
       });
 
-      if (!envConfig.entregaAutomatica.habilitada) {
-        return rechazar('desactivada', 'La entrega automática está apagada.');
-      }
-
-      if (!esHorarioNocturno()) {
-        return rechazar('horario_humano', 'Es horario de atención: lo revisa una persona.');
-      }
-
+      // El pedido ya cobrado se corta acá, antes de tocar nada.
+      //
+      // Esto estaba más abajo, después de guardar el número de operación, y esa
+      // diferencia de diez líneas era un agujero: la clienta pagaba, se le
+      // entregaba, y cualquier imagen que mandara después por el mismo chat
+      // llegaba hasta acá con un número nuevo que PISABA el de la venta real.
+      // El número original quedaba libre, y esa misma captura volvía a servir
+      // para cobrar otro pedido de madrugada. Un mensaje del cliente borraba
+      // la huella de su propia compra.
       if (['pagado', 'entregado'].includes(pedido.status)) {
         return rechazar('ya_estaba_pago', 'Este pedido ya figura cobrado.');
+      }
+
+      // Recién ahora se anota el número, aunque después no se entregue solo.
+      // Si no se guardara, el comprobante que revisa una persona a la mañana
+      // queda sin número registrado y esa misma captura sirve de nuevo la
+      // noche siguiente.
+      //
+      // Con su propio método y no pasando por `cambiarEstado`: esa función
+      // vuelve a sellar la fecha de cobro cada vez que el estado es 'pagado',
+      // así que anotar el número borraba quién había confirmado el pago.
+      if (operacionLimpia) {
+        await orderRepository.guardarOperacion(id, operacionLimpia);
+      }
+
+      // ¿Corresponde aprobar sin persona, ahora, para este número?
+      //
+      // Antes la respuesta era solo la hora. Ahora sale del modo que esté
+      // puesto en el tablero —noche, siempre o apagado—, que es lo que permite
+      // encender la aprobación automática al salir un rato sin tener que
+      // reiniciar el servidor. Los números de prueba entran siempre, para
+      // poder probar el circuito completo sin esperar a la madrugada.
+      const cuando = await autoReviewService.corresponde(
+        pedido.contact_phone || null
+      );
+      if (!cuando.puede) {
+        return rechazar(cuando.motivo, cuando.detalle);
       }
 
       if (!pedido.delivery_url || !pedido.delivery_url.trim()) {
@@ -446,7 +612,24 @@ export const orderController = {
       }
 
       // El precio sale del producto, no de lo que mandó el guion.
-      const precio = Number(pedido.price ?? pedido.amount ?? 0);
+      //
+      // Con una excepción: si a esta persona ya se le ofreció el precio de
+      // recuperación, lo que tiene que haber transferido es ese, no el de
+      // lista. Sin esto, el seguimiento le ofrecía el material a Gs. 15.000,
+      // la persona transfería 15.000, y la entrega automática lo rechazaba por
+      // monto insuficiente contra los 19.000 del producto: quedaba esperando
+      // hasta la mañana justo el cliente al que le habíamos pedido que
+      // confiara en una rebaja.
+      //
+      // El nivel 1 no cambia nada porque no ofrece descuento.
+      const precioLista = Number(pedido.price ?? pedido.amount ?? 0);
+      const precioRebajado = Number(pedido.precio_recuperacion) || 0;
+      const seLeOfrecioRebaja =
+        Number(pedido.recuperacion_nivel || 0) >= 2 &&
+        precioRebajado > 0 &&
+        precioRebajado < precioLista;
+
+      const precio = seLeOfrecioRebaja ? precioRebajado : precioLista;
       const montoLeido = Number(String(monto || '').replace(/[^0-9]/g, '')) || 0;
 
       if (!precio || !montoLeido) {
@@ -461,30 +644,95 @@ export const orderController = {
         return rechazar('monto_alto', 'Por encima del tope para aprobar sin revisión.');
       }
 
-      // La cuenta que recibe tiene que ser la nuestra. Se comparan solo los
-      // dígitos y por terminación, porque cada banco recorta el número de una
-      // forma distinta en la captura.
-      const cuentaPropia = String(process.env.PAGO_CUENTA || '').replace(/[^0-9]/g, '');
-      const cuentaLeida = String(cuenta || '').replace(/[^0-9]/g, '');
-
-      // Hacen falta al menos cuatro dígitos de cada lado.
+      // El dinero tiene que haber llegado a nosotros, y alcanza con UNA señal
+      // de las tres: el número de cuenta, el alias o documento, o el nombre.
       //
-      // Sin ese mínimo la comparación por terminación era una puerta abierta:
-      // si la captura estaba tapada y la visión alcanzaba a leer un solo
-      // dígito, cualquier cuenta que terminara en ese dígito daba por buena la
-      // transferencia. Una de cada diez cuentas ajenas pasaba.
-      if (cuentaPropia.length < 4 || cuentaLeida.length < 4) {
-        return rechazar('cuenta_ilegible', 'No se pudo leer la cuenta de destino con seguridad.');
+      // Es así y no "las tres a la vez" porque cada banco y cada billetera del
+      // Paraguay muestra cosas distintas en la captura. Uno pone la cuenta
+      // completa y ningún nombre; otro pone "Enviado a: ENMANUEL RODRIGUEZ" y
+      // nada más; el que transfiere por alias ve el alias y no la cuenta.
+      // Exigir las tres era rechazar comprobantes buenos por el formato del
+      // banco del cliente, y rechazarlos justo en la franja en la que no hay
+      // nadie para revisarlos a mano.
+      //
+      // Lo que no se hace es tomar una contradicción como fraude. Si la cuenta
+      // coincide pero el nombre no, lo más probable de lejos es que el modelo
+      // haya leído al que ENVÍA en vez de al que recibe —muchos comprobantes
+      // muestran el nombre del ordenante más grande—, y el dinero igual entró
+      // a nuestra cuenta. Se entrega.
+      //
+      // La dirección de falla es la correcta: si no coincide ninguna de las
+      // tres, no se rechaza el pago, se manda a revisión humana.
+      const cuentaLeida = String(cuenta || '').replace(/[^0-9]/g, '');
+      const propios = [
+        process.env.PAGO_CUENTA,
+        process.env.PAGO_ALIAS,
+        process.env.PAGO_DOCUMENTO
+      ]
+        .map(v => String(v || '').replace(/[^0-9]/g, ''))
+        .filter(v => v.length >= 4);
+
+      const titularPropio = normalizarNombre(process.env.PAGO_TITULAR);
+      const titularLeido = normalizarNombre(titular);
+
+      if (!propios.length && !titularPropio.length) {
+        return rechazar(
+          'sin_cuenta_configurada',
+          'No hay cuenta, alias ni titular cargados en el servidor para contrastar el comprobante.'
+        );
       }
 
-      // Se comparan las últimas cuatro cifras y no la cadena entera porque cada
-      // banco recorta el número de forma distinta en el comprobante.
-      if (cuentaPropia.slice(-4) !== cuentaLeida.slice(-4)) {
-        return rechazar('cuenta_ajena', 'La transferencia figura a otra cuenta.');
+      // Cuenta, alias o documento. Se compara por terminación y no la cadena
+      // entera porque cada banco recorta el número distinto; y cuantos más
+      // dígitos haya de los dos lados, más se comparan. Cuatro es el piso que
+      // impone el banco que menos muestra, no el criterio que querríamos: con
+      // menos, cualquier cuenta ajena que termine en esa cifra pasaría.
+      const coincideCuenta = cuentaLeida.length >= 4 && propios.some(propio => {
+        const largo = Math.min(propio.length, cuentaLeida.length, 6);
+        return propio.slice(-largo) === cuentaLeida.slice(-largo);
+      });
+
+      // El nombre. Se exige compartir una palabra larga —el apellido, en la
+      // práctica— porque los bancos lo escriben de cualquier manera:
+      // "RODRIGUEZ, E.", "Enmanuel R.", todo en mayúsculas, con o sin tildes.
+      const coincideTitular = titularPropio.length > 0 && titularLeido.length > 0 && (() => {
+        const palabras = new Set(titularPropio.filter(p => p.length >= 4));
+        return titularLeido.some(p => p.length >= 4 && palabras.has(p));
+      })();
+
+      if (!coincideCuenta && !coincideTitular) {
+        const leido = [
+          cuentaLeida ? `cuenta ${cuentaLeida}` : null,
+          String(titular || '').trim() ? `a nombre de "${String(titular).trim()}"` : null
+        ].filter(Boolean).join(', ');
+
+        return rechazar(
+          'destino_no_reconocido',
+          leido
+            ? `El comprobante figura ${leido}, y eso no coincide con ninguno de nuestros datos.`
+            : 'No se pudo leer ni la cuenta ni el titular de destino.'
+        );
       }
 
       if (!operacionLimpia) {
         return rechazar('sin_operacion', 'El comprobante no muestra número de operación.');
+      }
+
+      // El tope del día. Ver la nota en la configuración: ningún control
+      // individual puede ver que TODOS los comprobantes estén pasando.
+      const tope = envConfig.entregaAutomatica.maxPorDia;
+      if (tope > 0) {
+        const hechas = await orderRepository.autoAprobadosDelDia();
+        if (hechas >= tope) {
+          console.warn(
+            `🚨 [ENTREGA AUTO] Se alcanzó el tope de ${tope} entregas automáticas en el día. ` +
+            'El resto pasa a revisión humana hasta mañana.'
+          );
+          return rechazar(
+            'tope_diario',
+            `Ya se entregaron ${hechas} pedidos solos hoy. El resto los revisa una persona.`
+          );
+        }
       }
 
       const repetida = await orderRepository.operacionYaUsada(operacionLimpia, id);
@@ -504,11 +752,19 @@ export const orderController = {
           confirmedBy: null,
           autoAprobado: true,
           receiptOperacion: operacionLimpia,
-          // Solo si es un id numérico de la base. El guion a veces manda acá
-          // el identificador de Meta ("wamid.…"), que no es un número y
-          // rompería el UPDATE justo en el momento de cobrar.
-          receiptMessageId: Number.isInteger(Number(receipt_message_id)) ? Number(receipt_message_id) : null,
-          note: `Aprobado automáticamente a las ${horaEnParaguay()}h: monto ${montoLeido}, operación ${operacionLimpia}.`
+          // La misma guarda contra la carrera que usa la confirmación manual:
+          // dos comprobantes del mismo chat llegando juntos de madrugada
+          // entregaban dos veces.
+          siEstadoEs: pedido.status,
+          // Solo si es un id de mensaje de nuestra base. Ver `idDeMensaje`:
+          // acá había un cero disfrazado de entero válido que hacía fallar el
+          // UPDATE justo en el momento de cobrar.
+          receiptMessageId: idDeMensaje(receipt_message_id),
+          note:
+            `Aprobado automáticamente a las ${horaEnParaguay()}h ` +
+            `(modo ${cuando.modo}${cuando.por_prueba ? ', número de prueba' : ''}): ` +
+            `monto ${montoLeido}, operación ${operacionLimpia}, ` +
+            `verificado por ${[coincideCuenta ? 'cuenta/alias' : null, coincideTitular ? 'titular' : null].filter(Boolean).join(' y ')}.`
         });
       } catch (err) {
         // Última red: si entre el chequeo de arriba y este momento otro pedido
@@ -519,6 +775,12 @@ export const orderController = {
           return rechazar('operacion_repetida', 'Ese comprobante ya se usó para cobrar otro pedido.');
         }
         throw err;
+      }
+
+      // Sin fila actualizada, otro comprobante del mismo chat llegó primero y
+      // ya cobró este pedido. No se entrega de nuevo.
+      if (!pagado) {
+        return rechazar('ya_estaba_pago', 'Otro comprobante del mismo chat ya cobró este pedido.');
       }
 
       const entrega = await deliveryService.entregar(pedido, null);
@@ -540,7 +802,8 @@ export const orderController = {
 
       console.log(
         `🌙 [ENTREGA AUTO] Pedido #${id} cobrado y entregado sin revisión humana ` +
-        `(${horaEnParaguay()}h, operación ${operacionLimpia}).`
+        `(${horaEnParaguay()}h, modo ${cuando.modo}${cuando.por_prueba ? ', número de prueba' : ''}, ` +
+        `operación ${operacionLimpia}).`
       );
 
       return res.json({
@@ -548,7 +811,9 @@ export const orderController = {
         motivo: entrega.enviado ? null : entrega.motivo,
         detalle: entrega.detalle || null,
         estado: estadoFinal.status,
-        hora_paraguay: horaEnParaguay()
+        hora_paraguay: horaEnParaguay(),
+        modo: cuando.modo,
+        por_prueba: cuando.por_prueba
       });
     } catch (error) {
       // Ante cualquier problema, el comprobante queda para una persona. Nunca

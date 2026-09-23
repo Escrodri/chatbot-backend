@@ -38,7 +38,7 @@ export const ETAPAS = Object.freeze([
  * @returns {Promise<boolean>}
  */
 let _soportaEquipos = null;
-async function soportaEquipos() {
+export async function soportaEquipos() {
   if (_soportaEquipos !== null) return _soportaEquipos;
   try {
     const { rows } = await query(
@@ -125,7 +125,7 @@ export const orderRepository = {
       // rutas que lo modifican necesitan comprobarlo antes de cobrar o
       // entregar, y sin esto lo estaban haciendo a ciegas.
       `SELECT o.*, p.name AS product_name, p.slug AS product_slug,
-              p.price, p.delivery_url, p.delivery_note,
+              p.price, p.precio_recuperacion, p.delivery_url, p.delivery_note,
               c.channel_id, ${conEquipos ? 'ch.team_id' : 'NULL::int AS team_id'}
        FROM orders o
        LEFT JOIN products p ON o.product_id = p.id
@@ -226,7 +226,21 @@ export const orderRepository = {
       `INSERT INTO orders
          (conversation_id, product_id, contact_phone, contact_name, amount, currency, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (conversation_id, product_id) DO UPDATE
+       ON CONFLICT ${productId === null || productId === undefined
+          // Postgres trata cada NULL como distinto de los demás, así que la
+          // restricción UNIQUE(conversation_id, product_id) no impide nada
+          // cuando no hay producto: un pedido sin producto no chocaba consigo
+          // mismo y cada mensaje de interés abría una fila nueva.
+          //
+          // Consecuencias, las dos caras: el embudo contaba gente que no
+          // existe, justo cuando hay presupuesto de publicidad corriendo; y
+          // "¿ya pagó?" se respondía mirando la fila más nueva, que estaba
+          // vacía, así que el guion le volvía a cobrar a alguien que ya había
+          // pagado en la fila anterior.
+          //
+          // El índice parcial que lo arregla está en las migraciones.
+          ? '(conversation_id) WHERE product_id IS NULL'
+          : '(conversation_id, product_id)'} DO UPDATE
          SET updated_at = CURRENT_TIMESTAMP,
              -- Cada mensaje que entra sin que el pedido avance suma uno. El
              -- flujo lo usa para saber cuándo el guion dejó de servir.
@@ -347,6 +361,124 @@ export const orderRepository = {
   },
 
   /**
+   * Los pedidos a los que hoy les toca un seguimiento, con todo lo que el
+   * mensaje necesita para escribirse.
+   *
+   * Tres decisiones que no son obvias y conviene que queden acá:
+   *
+   * El reloj del silencio no es `etapa_at`, es el más nuevo entre `etapa_at` y
+   * el último mensaje de la persona. Alguien puede haber visto el precio a las
+   * dos de la tarde y seguir escribiendo preguntas a las seis sin avanzar de
+   * etapa; contando desde la etapa se le manda "¿seguís ahí?" a alguien que
+   * está escribiendo en ese momento, que es la forma más rápida de quedar como
+   * una máquina.
+   *
+   * Solo entran los pedidos en 'interesado'. El que mandó comprobante está
+   * esperando que una persona lo mire, y el rechazado ya recibió un pedido
+   * concreto: insistirle a cualquiera de los dos con un descuento contesta una
+   * pregunta que no hizo y deja la que sí hizo sin respuesta.
+   *
+   * El techo de etapa es 'recibio_datos'. De ahí para arriba ya hay un
+   * comprobante en juego.
+   *
+   * @param {{ maxNivel?: number, limite?: number }} opciones
+   */
+  async paraRecuperar({ maxNivel = 3, limite = 200 } = {}) {
+    const { rows } = await query(
+      `SELECT o.id, o.etapa, o.etapa_at, o.status, o.conversation_id, o.product_id,
+              o.contact_phone, o.amount, o.currency,
+              COALESCE(o.recuperacion_nivel, 0) AS recuperacion_nivel,
+              o.recuperacion_at,
+              GREATEST(o.etapa_at, c.last_customer_interaction) AS referencia,
+              EXTRACT(EPOCH FROM (
+                CURRENT_TIMESTAMP - GREATEST(o.etapa_at, c.last_customer_interaction)
+              )) / 60 AS minutos_silencio,
+              c.last_customer_interaction, c.bot_status, c.handed_over_at,
+              c.channel_id,
+              -- El identificador con el que Meta recibe los mensajes vive en
+              -- la tabla contacts, no en conversations. Pedirlo con el alias
+              -- equivocado no devolvía una columna vacía: tiraba la consulta
+              -- entera, y como el ciclo de recuperación atrapa sus propios
+              -- errores para no morirse, fallaba en silencio cada quince
+              -- minutos y nadie recibía jamás un seguimiento.
+              ct.platform_user_id,
+              ct.name AS contact_name,
+              ch.platform,
+              p.name AS product_name, p.price AS product_price,
+              p.currency AS product_currency, p.precio_recuperacion
+       FROM orders o
+       INNER JOIN conversations c ON o.conversation_id = c.id
+       INNER JOIN channels ch ON c.channel_id = ch.id
+       LEFT JOIN contacts ct ON c.contact_id = ct.id
+       LEFT JOIN products p ON o.product_id = p.id
+       WHERE o.status = 'interesado'
+         AND COALESCE(o.recuperacion_nivel, 0) < $2
+         AND array_position($1::text[], o.etapa) >= array_position($1::text[], 'vio_producto')
+         AND array_position($1::text[], o.etapa) <= array_position($1::text[], 'recibio_datos')
+         AND c.last_customer_interaction IS NOT NULL
+         -- Al que se enojó no se le insiste nunca más. Un "¿te quedó alguna
+         -- duda?" dos horas después de un insulto, y un descuento seis horas
+         -- más tarde, no recuperan a nadie: le confirman a esa persona que del
+         -- otro lado hay una máquina que no leyó lo que escribió.
+         AND c.molesto_at IS NULL
+       ORDER BY array_position($1::text[], o.etapa) DESC,
+                GREATEST(o.etapa_at, c.last_customer_interaction) ASC
+       LIMIT $3`,
+      [ETAPAS, maxNivel, limite]
+    );
+
+    return rows;
+  },
+
+  /**
+   * Deja anotado que este pedido ya subió un escalón de la escalera.
+   *
+   * Se llama también cuando el seguimiento no se mandó. Que un descarte no
+   * suba el nivel suena más prolijo, pero deja el pedido vencido para siempre:
+   * la pasada siguiente lo vuelve a encontrar, lo vuelve a descartar, y así
+   * cada quince minutos hasta que alguien mire los registros.
+   *
+   * @param {number} id
+   * @param {number} nivel
+   * @param {boolean} seEnvio Si no se envió, no se toca la fecha del último envío
+   */
+  /**
+   * Cuántas entregas hizo el sistema solo en lo que va del día paraguayo.
+   *
+   * El día se corta en Asunción y no en UTC porque es el día del negocio: un
+   * tope que se reinicia a las nueve de la noche, hora local, no es un tope
+   * diario, es un tope que se abre justo cuando empieza la franja en la que
+   * nadie está mirando.
+   *
+   * @returns {Promise<number>}
+   */
+  async autoAprobadosDelDia() {
+    const { rows } = await query(
+      `SELECT COUNT(*)::int AS cantidad
+         FROM orders
+        WHERE auto_aprobado = TRUE
+          AND confirmed_at >= (
+            ((CURRENT_TIMESTAMP AT TIME ZONE 'America/Asuncion')::date)::timestamp
+            AT TIME ZONE 'America/Asuncion'
+          )`
+    );
+    return rows[0]?.cantidad || 0;
+  },
+
+  async marcarRecuperacion(id, nivel, seEnvio = true) {
+    const { rows } = await query(
+      `UPDATE orders
+          SET recuperacion_nivel = GREATEST(COALESCE(recuperacion_nivel, 0), $2),
+              recuperacion_at = CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE recuperacion_at END
+        WHERE id = $1
+        RETURNING id, recuperacion_nivel, recuperacion_at`,
+      [id, nivel, seEnvio]
+    );
+
+    return rows[0] || null;
+  },
+
+  /**
    * ¿Este número de operación ya se usó para cobrar otro pedido?
    *
    * Una captura de transferencia se reenvía con dos toques. Si el mismo
@@ -422,7 +554,7 @@ export const orderRepository = {
    * 'pagado' y 'entregado' sellan además la fecha y quién lo confirmó, porque
    * son los dos momentos que después alguien va a querer auditar.
    */
-  async cambiarEstado(id, estado, { confirmedBy = null, note = null, receiptCheck = null, receiptMessageId = null, receiptOperacion = null, autoAprobado = null } = {}) {
+  async cambiarEstado(id, estado, { confirmedBy = null, note = null, receiptCheck = null, receiptMessageId = null, receiptOperacion = null, autoAprobado = null, siEstadoEs = null } = {}) {
     // Que el pedido avance significa que el guion sí entendió: el contador de
     // intentos vuelve a cero y la IA deja de estar a un paso de intervenir.
     const sets = ['status = $1', 'updated_at = CURRENT_TIMESTAMP', 'bot_intentos = 0'];
@@ -432,6 +564,17 @@ export const orderRepository = {
       sets.push('confirmed_at = CURRENT_TIMESTAMP');
       params.push(confirmedBy);
       sets.push(`confirmed_by = $${params.length}`);
+
+      // Si lo confirma una persona, deja de ser una aprobación del sistema.
+      //
+      // La marca era pegajosa: un pedido que el sistema aprobó de madrugada y
+      // cuya entrega falló, reintentado a mano desde el tablero, seguía
+      // contando como entrega automática del día. Unos pocos reintentos
+      // manuales agotaban el tope y cerraban la puerta automática para la
+      // noche siguiente sin que nadie entendiera por qué.
+      if (confirmedBy !== null && autoAprobado === null) {
+        sets.push('auto_aprobado = FALSE');
+      }
     } else if (estado === 'entregado') {
       sets.push('delivered_at = CURRENT_TIMESTAMP');
     } else {
@@ -472,11 +615,28 @@ export const orderRepository = {
     }
 
     params.push(id);
+    const posicionId = params.length;
+
+    // Guarda contra la carrera de los dos clics.
+    //
+    // Confirmar un pago es leer el pedido, decidir, y recién después escribir.
+    // Dos peticiones que entran juntas —doble clic, una pestaña vieja, el
+    // guion reintentando— leen las dos el mismo estado anterior, las dos pasan
+    // los controles del controlador, y las dos entregan: el cliente recibe el
+    // material dos veces y la fecha de cobro se vuelve a sellar.
+    //
+    // Pidiendo que el estado siga siendo el que se leyó, la segunda no
+    // actualiza ninguna fila y el controlador se entera de que perdió.
+    let condicionEstado = '';
+    if (siEstadoEs !== null) {
+      params.push(siEstadoEs);
+      condicionEstado = ` AND status = $${params.length}`;
+    }
 
     let rows;
     try {
       ({ rows } = await query(
-        `UPDATE orders SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING *`,
+        `UPDATE orders SET ${sets.join(', ')} WHERE id = $${posicionId}${condicionEstado} RETURNING *`,
         params
       ));
     } catch (err) {

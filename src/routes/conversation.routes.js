@@ -28,6 +28,11 @@ conversationRouter.post('/:id/messages', requireAuthOrService, conversationContr
 // El bot levanta la mano y le pasa el chat a una persona
 conversationRouter.post('/:id/handover', requireAuthOrService, conversationController.handover);
 
+// Esta persona se enojó o nos trató de estafadores. No corta nada: marca el
+// chat en la bandeja y lo saca de la recuperación de abandonos, para que no le
+// llegue un "¿te quedó alguna duda?" dos horas después de habernos puteado.
+conversationRouter.post('/:id/molesto', requireAuthOrService, conversationController.marcarMolesto);
+
 // Reintentar el envío de un mensaje que Meta rechazó (conserva el adjunto)
 conversationRouter.post('/:id/messages/:messageId/retry', requireAuth, conversationController.retryMessage);
 

@@ -161,7 +161,88 @@ export async function initDatabase() {
       // de Meta, y los fallos no se recordaban: se reintentaba lo mismo hasta
       // que Meta cortaba por límite de peticiones.
       'ALTER TABLE contacts ADD COLUMN IF NOT EXISTS perfil_intentos INTEGER NOT NULL DEFAULT 0',
-      'ALTER TABLE contacts ADD COLUMN IF NOT EXISTS perfil_ultimo_intento TIMESTAMPTZ'
+      'ALTER TABLE contacts ADD COLUMN IF NOT EXISTS perfil_ultimo_intento TIMESTAMPTZ',
+
+      // Cuántos seguimientos de recuperación se le mandaron ya a este pedido,
+      // y cuándo salió el último.
+      //
+      // El nivel no cuenta mensajes enviados: cuenta hasta qué escalón de la
+      // escalera llegó el pedido. Sube también cuando un seguimiento se
+      // descarta —por caer en horario de silencio o fuera de la ventana
+      // gratuita de Meta—, porque si no subiera, ese mismo seguimiento
+      // volvería a estar vencido en la pasada siguiente y el pedido quedaría
+      // atascado ahí, intentando lo mismo cada quince minutos para siempre.
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS recuperacion_nivel SMALLINT NOT NULL DEFAULT 0',
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS recuperacion_at TIMESTAMPTZ',
+      'CREATE INDEX IF NOT EXISTS idx_orders_recuperacion ON orders (status, recuperacion_nivel, etapa_at)',
+
+      // Cuándo esta persona se enojó o nos trató de estafadores.
+      //
+      // Hace dos cosas, y la segunda es la que importa: marca el chat en la
+      // bandeja para que se lo mire, y lo saca de la recuperación de
+      // abandonos. Mandarle "¿te quedó alguna duda?" dos horas después a
+      // alguien que escribió "estafan a la gente", y un descuento seis horas
+      // más tarde, no es insistir: es confirmarle que del otro lado hay una
+      // máquina que no leyó nada.
+      'ALTER TABLE conversations ADD COLUMN IF NOT EXISTS molesto_at TIMESTAMPTZ',
+
+      // Un solo pedido sin producto por conversación.
+      //
+      // UNIQUE(conversation_id, product_id) no cubre este caso: Postgres trata
+      // cada NULL como distinto de los demás, así que el pedido sin producto
+      // nunca chocaba consigo mismo y cada mensaje de interés abría una fila
+      // nueva. El embudo contaba gente que no existe y "¿ya pagó?" miraba la
+      // fila más nueva —la vacía—, así que se le volvía a cobrar a quien ya
+      // había pagado en la anterior.
+      // Antes del índice hay que limpiar los duplicados que ya se crearon, o
+      // el índice no se puede construir y el arreglo no entra nunca.
+      //
+      // Se borran solo los que no tienen nada que perder: los que siguen en
+      // 'interesado' y nunca tuvieron un comprobante. De cada conversación
+      // sobrevive el que llegó más lejos en el embudo. Si igual quedan dos
+      // pagados —que no debería pasar—, el índice falla con un aviso y el
+      // sistema sigue funcionando como hasta ahora.
+      `DELETE FROM orders o
+        WHERE o.product_id IS NULL
+          AND o.status = 'interesado'
+          AND o.receipt_operacion IS NULL
+          AND EXISTS (
+            SELECT 1 FROM orders otro
+             WHERE otro.conversation_id = o.conversation_id
+               AND otro.product_id IS NULL
+               AND otro.id <> o.id
+               AND (
+                 array_position(
+                   ARRAY['entro','vio_producto','vio_muestras','pidio_comprar',
+                         'recibio_datos','mando_comprobante','pago','recibio_material'],
+                   otro.etapa
+                 ),
+                 otro.id
+               ) > (
+                 array_position(
+                   ARRAY['entro','vio_producto','vio_muestras','pidio_comprar',
+                         'recibio_datos','mando_comprobante','pago','recibio_material'],
+                   o.etapa
+                 ),
+                 o.id
+               )
+          )`,
+
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_conversacion_sin_producto
+         ON orders (conversation_id)
+         WHERE product_id IS NULL`,
+
+      // Ajustes que se cambian en caliente, desde el tablero.
+      //
+      // Las variables de entorno sirven para lo que se define una vez. Para
+      // "salgo dos horas, que apruebe solo" no sirven: cambiarlas reinicia el
+      // servicio y tarda minutos, así que en la práctica nadie las cambia.
+      `CREATE TABLE IF NOT EXISTS ajustes (
+         clave      VARCHAR(80) PRIMARY KEY,
+         valor      JSONB NOT NULL,
+         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         updated_by INTEGER
+       )`
     ];
 
     for (const sql of columnMigrations) {
