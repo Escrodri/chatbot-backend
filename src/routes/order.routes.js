@@ -20,6 +20,11 @@ orderRouter.get('/embudo', requireAuth, orderController.embudo);
 orderRouter.get('/revision-config', requireAuth, orderController.configRevision);
 orderRouter.patch('/revision-config', requireAuth, orderController.cambiarConfigRevision);
 
+// La cuenta que recibe las transferencias. Es contra esto que se contrasta
+// cada comprobante antes de entregar sin que nadie mire, así que vive en el
+// servidor y se carga desde el panel, nunca la manda el guion.
+orderRouter.patch('/datos-pago', requireAuth, orderController.guardarDatosPago);
+
 // Abrir/recuperar pedido. Lo llama n8n: la respuesta trae `duplicado` y
 // `ya_pago`, que es el "buscar duplicado" del flujo viejo resuelto de una.
 orderRouter.post('/', requireAuthOrService, orderController.createOrGet);

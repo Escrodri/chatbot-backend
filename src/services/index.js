@@ -10,3 +10,4 @@ export { automationService } from './automation.service.js';
 export { deliveryService } from './delivery.service.js';
 export { recoveryService } from './recovery.service.js';
 export { autoReviewService } from './auto-review.service.js';
+export { datosPagoService } from './datos-pago.service.js';

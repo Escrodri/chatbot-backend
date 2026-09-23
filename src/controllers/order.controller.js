@@ -6,34 +6,8 @@ import { socketManager } from '../sockets/index.js';
 import { envConfig, horaEnParaguay } from '../config/env.config.js';
 import { userRepository } from '../repositories/user.repository.js';
 import { autoReviewService } from '../services/auto-review.service.js';
+import { datosPagoService } from '../services/datos-pago.service.js';
 
-/**
- * ¿Este pedido es de quien lo está pidiendo?
- *
- * Las tres rutas que modifican un pedido —cambiar estado, aprobar de
- * madrugada, marcar etapa— no comprobaban nada. Con una sesión de asesor y un
- * id cualquiera se podía confirmar el pago de otro negocio y dispararle la
- * entrega a su cliente.
- *
- * El token de servicio queda afuera del chequeo a propósito: es el bot, no
- * tiene equipo, y solo toca los pedidos que el propio flujo abrió.
- *
- * @param {object} req
- * @param {object|null} pedido Tiene que venir de `findConEntrega`, que resuelve canal y equipo
- * @returns {Promise<boolean>}
- */
-/**
- * Un nombre partido en palabras comparables: sin tildes, sin puntuación y en
- * minúsculas.
- *
- * Los bancos escriben el titular de cualquier manera —"RODRIGUEZ, E.",
- * "Enmanuel R.", todo en mayúsculas, con o sin tildes—, así que comparar las
- * cadenas enteras no sirve para nada. Lo que sobrevive a todas esas formas es
- * el apellido, y para eso alcanza con ver si comparten alguna palabra larga.
- *
- * @param {string|null|undefined} valor
- * @returns {string[]}
- */
 /**
  * El id de un mensaje de nuestra base, o null.
  *
@@ -62,6 +36,49 @@ function idDeMensaje(valor) {
   return Number.isSafeInteger(numero) && numero > 0 ? numero : null;
 }
 
+/**
+ * Una llave para el comprobante que no muestra número de operación.
+ *
+ * Se arma con fecha + hora + monto, todo en dígitos, porque son los tres datos
+ * que cualquier pantalla de resumen muestra siempre. La misma captura reenviada
+ * da exactamente la misma huella y el índice único la rechaza; dos pagos
+ * distintos solo chocarían si ocurrieran en el mismo minuto por el mismo
+ * importe, y ese caso cae en revisión humana.
+ *
+ * Se exige que estén los tres: con dos, la huella empieza a repetirse por
+ * casualidad y dejaría afuera pagos buenos.
+ *
+ * El prefijo 9 evita que una huella pueda coincidir de casualidad con un
+ * número de operación real de otro comprobante.
+ *
+ * @param {{fecha: *, hora: *, monto: *}} datos
+ * @returns {string} Vacío si no alcanza para armarla
+ */
+function construirHuella({ fecha, hora, monto }) {
+  const d = (v) => String(v || '').replace(/[^0-9]/g, '');
+
+  const f = d(fecha);
+  const h = d(hora);
+  const m = d(monto);
+
+  // Una fecha necesita al menos día, mes y año corto; una hora, hora y minuto.
+  if (f.length < 6 || h.length < 3 || !m) return '';
+
+  return `9${f}${h.padStart(4, '0').slice(0, 4)}${m}`;
+}
+
+/**
+ * Un nombre partido en palabras comparables: sin tildes, sin puntuación y en
+ * minúsculas.
+ *
+ * Los bancos escriben el titular de cualquier manera —"RODRIGUEZ, E.",
+ * "Enmanuel R.", todo en mayúsculas, con o sin tildes—, así que comparar las
+ * cadenas enteras no sirve para nada. Lo que sobrevive a todas esas formas es
+ * el apellido, y para eso alcanza con ver si comparten alguna palabra larga.
+ *
+ * @param {string|null|undefined} valor
+ * @returns {string[]}
+ */
 function normalizarNombre(valor) {
   return String(valor || '')
     .normalize('NFD')
@@ -72,6 +89,21 @@ function normalizarNombre(valor) {
     .filter(Boolean);
 }
 
+/**
+ * ¿Este pedido es de quien lo está pidiendo?
+ *
+ * Las tres rutas que modifican un pedido —cambiar estado, aprobar de
+ * madrugada, marcar etapa— no comprobaban nada. Con una sesión de asesor y un
+ * id cualquiera se podía confirmar el pago de otro negocio y dispararle la
+ * entrega a su cliente.
+ *
+ * El token de servicio queda afuera del chequeo a propósito: es el bot, no
+ * tiene equipo, y solo toca los pedidos que el propio flujo abrió.
+ *
+ * @param {object} req
+ * @param {object|null} pedido Tiene que venir de `findConEntrega`, que resuelve canal y equipo
+ * @returns {Promise<boolean>}
+ */
 async function puedeTocar(req, pedido) {
   if (!pedido) return false;
 
@@ -475,6 +507,10 @@ export const orderController = {
         monto_maximo: envConfig.entregaAutomatica.montoMaximo,
         habilitada_en_servidor: envConfig.entregaAutomatica.habilitada,
         max_por_dia: envConfig.entregaAutomatica.maxPorDia,
+        // Si falta la cuenta, la aprobación automática no puede entregar nada
+        // por más encendida que esté. Vale más decirlo acá, antes de que un
+        // cliente pague, que descubrirlo con la plata ya transferida.
+        datos_pago: await datosPagoService.leer().catch(() => ({ configurado: false })),
         // Cuántas lleva hechas hoy. Es lo primero que uno quiere ver al volver
         // de la calle, y lo que dice si el tope está por frenar la entrega.
         entregadas_hoy: await orderRepository.autoAprobadosDelDia().catch(() => 0)
@@ -514,6 +550,36 @@ export const orderController = {
         return res.status(400).json({ error: error.message });
       }
       return res.status(500).json({ error: 'Error al guardar la configuración: ' + error.message });
+    }
+  },
+
+  /**
+   * Guarda la cuenta que recibe las transferencias.
+   *
+   * Solo administradores: es el dato contra el que se valida cada comprobante
+   * antes de entregar sin revisión, así que cambiarlo es cambiar quién puede
+   * cobrar.
+   *
+   * PATCH /api/orders/datos-pago
+   */
+  async guardarDatosPago(req, res) {
+    try {
+      if (!['admin', 'superadmin'].includes(req.user?.role)) {
+        return res.status(403).json({ error: 'Solo un administrador puede cambiar esto.' });
+      }
+
+      const datos = await datosPagoService.guardar(req.body || {}, req.user.id);
+
+      console.log(
+        `⚙️ [DATOS DE PAGO] ${req.user.name || req.user.email || 'alguien'} actualizó la cuenta de cobro.`
+      );
+
+      return res.json(datos);
+    } catch (error) {
+      if (error.code === 'ERR_DATOS_PAGO_INCOMPLETOS') {
+        return res.status(400).json({ error: error.message });
+      }
+      return res.status(500).json({ error: 'Error al guardar los datos de pago: ' + error.message });
     }
   },
 
@@ -559,7 +625,25 @@ export const orderController = {
         return res.status(404).json({ error: 'Pedido no encontrado' });
       }
 
+      // La llave que impide que la misma captura cobre dos veces.
+      //
+      // Lo ideal es el número de operación. El problema es que medio Paraguay
+      // transfiere con apps cuya pantalla de resumen no lo muestra: dice
+      // "¡Transferencia cargada con éxito!", el monto, a quién fue, la fecha y
+      // la hora, y nada más. Exigir el número ahí no protege de nada, porque
+      // esos comprobantes son perfectamente legítimos: solo manda a revisión
+      // humana a la mayoría de la gente que paga, que es justo lo contrario de
+      // para lo que existe todo esto.
+      //
+      // Cuando no hay número se arma una huella con fecha, hora y monto. Dos
+      // transferencias distintas no coinciden en los tres datos salvo que
+      // ocurran en el mismo minuto por el mismo importe, y en ese caso la
+      // segunda cae en revisión humana, que es el lado correcto del error.
+      // Reenviar la misma captura, en cambio, da siempre la misma huella y
+      // queda bloqueado por el mismo índice único de siempre.
       const operacionLimpia = String(operacion || '').replace(/[^0-9]/g, '');
+      const huella = construirHuella({ fecha, hora, monto });
+      const claveComprobante = operacionLimpia || huella;
 
       const rechazar = (motivo, detalle) => res.json({
         entregado: false,
@@ -589,8 +673,8 @@ export const orderController = {
       // Con su propio método y no pasando por `cambiarEstado`: esa función
       // vuelve a sellar la fecha de cobro cada vez que el estado es 'pagado',
       // así que anotar el número borraba quién había confirmado el pago.
-      if (operacionLimpia) {
-        await orderRepository.guardarOperacion(id, operacionLimpia);
+      if (claveComprobante) {
+        await orderRepository.guardarOperacion(id, claveComprobante);
       }
 
       // ¿Corresponde aprobar sin persona, ahora, para este número?
@@ -664,21 +748,20 @@ export const orderController = {
       // La dirección de falla es la correcta: si no coincide ninguna de las
       // tres, no se rechaza el pago, se manda a revisión humana.
       const cuentaLeida = String(cuenta || '').replace(/[^0-9]/g, '');
-      const propios = [
-        process.env.PAGO_CUENTA,
-        process.env.PAGO_ALIAS,
-        process.env.PAGO_DOCUMENTO
-      ]
-        .map(v => String(v || '').replace(/[^0-9]/g, ''))
-        .filter(v => v.length >= 4);
 
-      const titularPropio = normalizarNombre(process.env.PAGO_TITULAR);
+      // Los datos propios salen del panel, con el entorno como respaldo. Nunca
+      // de lo que manda el guion: si el guion pudiera decir contra qué
+      // compararse, alcanzaría con un flujo mal armado para regalar todo.
+      const nuestros = await datosPagoService.leer();
+      const propios = datosPagoService.identificadores(nuestros);
+      const titularPropio = normalizarNombre(nuestros.titular);
       const titularLeido = normalizarNombre(titular);
 
       if (!propios.length && !titularPropio.length) {
         return rechazar(
           'sin_cuenta_configurada',
-          'No hay cuenta, alias ni titular cargados en el servidor para contrastar el comprobante.'
+          'Falta cargar la cuenta que recibe las transferencias. Se carga en Pedidos, ' +
+          'en el panel de aprobación automática.'
         );
       }
 
@@ -714,8 +797,14 @@ export const orderController = {
         );
       }
 
-      if (!operacionLimpia) {
-        return rechazar('sin_operacion', 'El comprobante no muestra número de operación.');
+      // Sin número de operación Y sin fecha/hora/monto no hay forma de saber
+      // si esta captura ya se usó antes, y sin eso la misma imagen cobra todas
+      // las veces que la manden.
+      if (!claveComprobante) {
+        return rechazar(
+          'sin_identificador',
+          'El comprobante no muestra número de operación ni fecha y hora legibles.'
+        );
       }
 
       // El tope del día. Ver la nota en la configuración: ningún control
@@ -735,10 +824,10 @@ export const orderController = {
         }
       }
 
-      const repetida = await orderRepository.operacionYaUsada(operacionLimpia, id);
+      const repetida = await orderRepository.operacionYaUsada(claveComprobante, id);
       if (repetida) {
         console.warn(
-          `🚨 [ENTREGA AUTO] Pedido #${id}: la operación ${operacionLimpia} ya cobró el pedido #${repetida.id}. ` +
+          `🚨 [ENTREGA AUTO] Pedido #${id}: el comprobante ${claveComprobante} ya cobró el pedido #${repetida.id}. ` +
           'Se manda a revisión humana.'
         );
         return rechazar('operacion_repetida', `Ese comprobante ya se usó en el pedido #${repetida.id}.`);
@@ -751,7 +840,7 @@ export const orderController = {
         pagado = await orderRepository.cambiarEstado(id, 'pagado', {
           confirmedBy: null,
           autoAprobado: true,
-          receiptOperacion: operacionLimpia,
+          receiptOperacion: claveComprobante,
           // La misma guarda contra la carrera que usa la confirmación manual:
           // dos comprobantes del mismo chat llegando juntos de madrugada
           // entregaban dos veces.
@@ -763,7 +852,7 @@ export const orderController = {
           note:
             `Aprobado automáticamente a las ${horaEnParaguay()}h ` +
             `(modo ${cuando.modo}${cuando.por_prueba ? ', número de prueba' : ''}): ` +
-            `monto ${montoLeido}, operación ${operacionLimpia}, ` +
+            `monto ${montoLeido}, ${operacionLimpia ? 'operación ' + operacionLimpia : 'huella ' + huella}, ` +
             `verificado por ${[coincideCuenta ? 'cuenta/alias' : null, coincideTitular ? 'titular' : null].filter(Boolean).join(' y ')}.`
         });
       } catch (err) {
@@ -803,7 +892,7 @@ export const orderController = {
       console.log(
         `🌙 [ENTREGA AUTO] Pedido #${id} cobrado y entregado sin revisión humana ` +
         `(${horaEnParaguay()}h, modo ${cuando.modo}${cuando.por_prueba ? ', número de prueba' : ''}, ` +
-        `operación ${operacionLimpia}).`
+        `${operacionLimpia ? 'operación ' + operacionLimpia : 'huella ' + huella}).`
       );
 
       return res.json({
