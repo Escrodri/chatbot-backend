@@ -757,7 +757,18 @@ export const orderController = {
       // Los datos propios salen del panel, con el entorno como respaldo. Nunca
       // de lo que manda el guion: si el guion pudiera decir contra qué
       // compararse, alcanzaría con un flujo mal armado para regalar todo.
-      const nuestros = await datosPagoService.leer();
+      let nuestros = await datosPagoService.leer();
+
+      // Si nadie la cargó en ningún lado, se saca del mensaje que el propio
+      // bot le escribió a esta persona en este chat. Ver `leerDelChat`: la
+      // pregunta que termina contestando es la correcta, "¿transfirió a donde
+      // le dijimos?", y no depende de que el mismo dato esté cargado dos veces
+      // en dos lugares distintos.
+      if (!nuestros.configurado) {
+        const delChat = await datosPagoService.leerDelChat(pedido.conversation_id);
+        if (delChat) nuestros = delChat;
+      }
+
       const propios = datosPagoService.identificadores(nuestros);
       const titularPropio = normalizarNombre(nuestros.titular);
       const titularLeido = normalizarNombre(titular);

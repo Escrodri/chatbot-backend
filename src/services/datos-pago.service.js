@@ -1,4 +1,5 @@
 import { settingRepository } from '../repositories/setting.repository.js';
+import { query } from '../database/index.js';
 
 /**
  * La cuenta que recibe las transferencias.
@@ -86,6 +87,73 @@ export const datosPagoService = {
       origen: sirve(deEntorno) ? 'entorno' : 'ninguno',
       configurado: sirve(deEntorno)
     };
+  },
+
+  /**
+   * Los datos sacados del mensaje que el bot ya le mandó a esta persona.
+   *
+   * Es el último recurso, y resultó ser el mejor de todos: si nadie cargó la
+   * cuenta en ningún lado, se lee del bloque de datos bancarios que el propio
+   * sistema le escribió a este cliente en este mismo chat. La pregunta que
+   * termina contestando es exactamente la correcta: ¿transfirió a donde le
+   * dijimos que transfiera?
+   *
+   * No lo manda el guion en la petición: se lee de nuestra base, de un mensaje
+   * que salió de nuestro servidor. Un flujo mal armado no puede inventarlo.
+   *
+   * Existe porque la cuenta estaba cargada en las variables del guion y no en
+   * las del backend, y esa diferencia —invisible, en dos lugares distintos—
+   * hizo que se rechazara un pago real. Con esto, el sistema deja de depender
+   * de que alguien se acuerde de cargar el mismo dato dos veces.
+   *
+   * @param {number} conversationId
+   * @returns {Promise<object|null>}
+   */
+  async leerDelChat(conversationId) {
+    if (!conversationId) return null;
+
+    let filas = [];
+    try {
+      const { rows } = await query(
+        `SELECT text FROM messages
+          WHERE conversation_id = $1
+            AND direction = 'outbound'
+            AND text ILIKE '%titular%'
+          ORDER BY id DESC
+          LIMIT 5`,
+        [conversationId]
+      );
+      filas = rows;
+    } catch (err) {
+      console.warn('⚠️ [DATOS DE PAGO] No se pudo leer el chat:', err.message);
+      return null;
+    }
+
+    for (const { text } of filas) {
+      const texto = String(text || '');
+
+      // Se buscan por etiqueta y no cualquier número suelto: el mismo mensaje
+      // trae el monto, y tomarlo por una cuenta sería aceptar como válido un
+      // comprobante cuyo destino coincida con el importe.
+      const tras = (etiqueta) => {
+        const m = texto.match(new RegExp(etiqueta + '[^0-9]{0,40}([0-9][0-9.\\-\\s]{3,})', 'i'));
+        return m ? m[1].replace(/[^0-9]/g, '') : '';
+      };
+
+      const titular = (texto.match(/titular:?\**\s*\**\s*([^\n*]{3,60})/i) || [])[1] || '';
+
+      const datos = normalizar({
+        alias: tras('alias'),
+        cuenta: tras('cuenta completa') || tras('cuenta'),
+        documento: tras('documento'),
+        titular: titular.trim(),
+        banco: (texto.match(/banco:?\**\s*\**\s*([^\n*]{2,40})/i) || [])[1]?.trim() || ''
+      });
+
+      if (sirve(datos)) return { ...datos, origen: 'chat', configurado: true };
+    }
+
+    return null;
   },
 
   /**
