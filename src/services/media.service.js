@@ -41,6 +41,27 @@ const MIME_EXTENSION_MAP = {
 };
 
 /**
+ * Las únicas extensiones que un archivo subido puede conservar.
+ *
+ * Estos archivos se guardan en /uploads y se sirven desde el mismo dominio que
+ * el panel. Dejar que la extensión venga del nombre que manda quien sube era
+ * una puerta abierta: un adjunto llamado "x.html" con HTML adentro quedaba
+ * publicado en el mismo origen que la cookie de sesión, y quien abriera ese
+ * enlace le entregaba su sesión a quien lo subió.
+ *
+ * `.svg` queda afuera aunque sea una imagen legítima, porque un SVG puede
+ * llevar scripts adentro y el navegador los ejecuta igual que en un HTML. Un
+ * SVG que llegue como adjunto se guarda como .bin y se descarga en vez de
+ * abrirse, que es exactamente lo que queremos.
+ */
+const EXTENSIONES_PERMITIDAS = new Set([
+  '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp',
+  '.ogg', '.m4a', '.mp3', '.wav', '.aac', '.webm', '.opus',
+  '.mp4', '.3gp', '.mov',
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.txt', '.csv'
+]);
+
+/**
  * Servicio de Descarga de Medios Efímeros de Meta (WhatsApp Cloud API):
  * Las URLs de medios de WhatsApp expiran en 5 minutos.
  * Este servicio descarga inmediatamente el binario y lo almacena localmente.
@@ -182,8 +203,18 @@ export const mediaService = {
     }
 
     let cleanMime = (mimeType || '').split(';')[0].trim().toLowerCase();
-    let origExt = path.extname(fileName || '').toLowerCase();
-    let ext = origExt || MIME_EXTENSION_MAP[cleanMime] || '.bin';
+    const origExt = path.extname(fileName || '').toLowerCase();
+
+    // La extensión sale de la lista blanca, nunca del nombre a secas. El tipo
+    // declarado tampoco sirve solo como defensa, porque también lo elige quien
+    // sube: se usa únicamente para resolver el caso en que el nombre no traiga
+    // una extensión reconocida. Lo desconocido termina en .bin, que el
+    // navegador descarga en vez de ejecutar.
+    let ext = EXTENSIONES_PERMITIDAS.has(origExt)
+      ? origExt
+      : (MIME_EXTENSION_MAP[cleanMime] || '.bin');
+
+    if (ext === '.svg') ext = '.bin';
 
     const fileHash = crypto.createHash('sha256').update(buffer).digest('hex').substring(0, 16);
     let finalFileName = `${Date.now()}_${fileHash}${ext}`;

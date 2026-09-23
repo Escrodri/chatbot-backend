@@ -122,7 +122,46 @@ export async function initDatabase() {
       // descripción larga ni siquiera se llega a ver la portada.
       //
       // Dos textos porque son dos trabajos distintos, no porque uno esté mal.
-      'ALTER TABLE products ADD COLUMN IF NOT EXISTS resumen TEXT'
+      'ALTER TABLE products ADD COLUMN IF NOT EXISTS resumen TEXT',
+
+      // Un número de operación no puede cobrar dos pedidos. Se lo prohíbe la
+      // base y no el código.
+      //
+      // El chequeo en JavaScript era leer y después escribir, sin nada en el
+      // medio: dos comprobantes iguales llegando en el mismo segundo pasaban
+      // los dos, porque cuando el segundo preguntó "¿ya se usó?" el primero
+      // todavía no había terminado de guardarse. Con el índice único la
+      // segunda escritura falla siempre, sin importar el orden ni cuántos
+      // procesos haya.
+      //
+      // Es parcial a propósito: solo cuentan los pedidos cobrados. Que el
+      // mismo número aparezca en uno rechazado es alguien reintentando, no un
+      // fraude.
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_operacion_unica
+         ON orders (receipt_operacion)
+         WHERE receipt_operacion IS NOT NULL AND status IN ('pagado', 'entregado')`,
+
+      // La bandeja cuenta las compras previas de cada persona cruzando por
+      // contact_id, y ese cruce no tenía índice: cada vez que se pintaba la
+      // lista, Postgres recorría la tabla entera una vez por cada chat.
+      // Invisible con cien conversaciones, medio segundo con diez mil.
+      'CREATE INDEX IF NOT EXISTS idx_conversations_contact ON conversations (contact_id)',
+
+      // La bandeja ordena por el último mensaje. Sin índice, ordenar es leer
+      // todo y clasificarlo, cada cinco segundos, por cada asesor con la
+      // pantalla abierta.
+      'CREATE INDEX IF NOT EXISTS idx_conversations_ultimo_mensaje ON conversations (last_message_time DESC)',
+
+      // Cuándo se intentó por última vez traer la foto y el nombre real de un
+      // contacto de Facebook o Instagram, y cuántas veces se intentó.
+      //
+      // Sin esto el intento se repetía en cada carga de la bandeja, o sea cada
+      // cinco segundos por asesor, para siempre. Un contacto sin foto —que es
+      // lo normal en Instagram— se convertía en una llamada permanente a la API
+      // de Meta, y los fallos no se recordaban: se reintentaba lo mismo hasta
+      // que Meta cortaba por límite de peticiones.
+      'ALTER TABLE contacts ADD COLUMN IF NOT EXISTS perfil_intentos INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE contacts ADD COLUMN IF NOT EXISTS perfil_ultimo_intento TIMESTAMPTZ'
     ];
 
     for (const sql of columnMigrations) {

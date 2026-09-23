@@ -4,6 +4,42 @@ import { conversationRepository } from '../repositories/conversation.repository.
 import { deliveryService } from '../services/delivery.service.js';
 import { socketManager } from '../sockets/index.js';
 import { envConfig, esHorarioNocturno, horaEnParaguay } from '../config/env.config.js';
+import { userRepository } from '../repositories/user.repository.js';
+
+/**
+ * ¿Este pedido es de quien lo está pidiendo?
+ *
+ * Las tres rutas que modifican un pedido —cambiar estado, aprobar de
+ * madrugada, marcar etapa— no comprobaban nada. Con una sesión de asesor y un
+ * id cualquiera se podía confirmar el pago de otro negocio y dispararle la
+ * entrega a su cliente.
+ *
+ * El token de servicio queda afuera del chequeo a propósito: es el bot, no
+ * tiene equipo, y solo toca los pedidos que el propio flujo abrió.
+ *
+ * @param {object} req
+ * @param {object|null} pedido Tiene que venir de `findConEntrega`, que resuelve canal y equipo
+ * @returns {Promise<boolean>}
+ */
+async function puedeTocar(req, pedido) {
+  if (!pedido) return false;
+
+  const rol = req.user?.role;
+  if (rol === 'service' || rol === 'superadmin') return true;
+
+  if (req.user?.team_id && pedido.team_id && pedido.team_id !== req.user.team_id) {
+    return false;
+  }
+
+  if (rol === 'agent' && pedido.channel_id) {
+    const asignados = await userRepository.getAssignedChannelIds(req.user.id);
+    // Sin canales asignados el asesor ve todo lo de su equipo, que es la misma
+    // convención que usa la bandeja. El filtro de equipo de arriba ya lo acota.
+    if (asignados.length > 0 && !asignados.includes(pedido.channel_id)) return false;
+  }
+
+  return true;
+}
 
 export const orderController = {
   /**
@@ -14,9 +50,20 @@ export const orderController = {
   async list(req, res) {
     try {
       const { status = null, phone = null, limit = 100, offset = 0 } = req.query;
+
+      const teamId = req.user?.role === 'superadmin' ? null : (req.user?.team_id || null);
+
+      let assignedChannelIds = null;
+      if (req.user?.role === 'agent') {
+        const ids = await userRepository.getAssignedChannelIds(req.user.id);
+        if (ids && ids.length > 0) assignedChannelIds = ids;
+      }
+
       const pedidos = await orderRepository.list({
         status,
         phone,
+        teamId,
+        assignedChannelIds,
         limit: parseInt(limit, 10) || 100,
         offset: parseInt(offset, 10) || 0
       });
@@ -138,6 +185,7 @@ export const orderController = {
         note = null,
         receipt_check = null,
         receipt_message_id = null,
+        receipt_operacion = null,
         notify = true
       } = req.body || {};
 
@@ -158,6 +206,12 @@ export const orderController = {
       const conEntrega = await orderRepository.findConEntrega(id);
       if (!conEntrega) return res.status(404).json({ error: 'Pedido no encontrado' });
 
+      // Se contesta 404 y no 403 a propósito: decir "existe pero no es tuyo"
+      // ya confirma que existe, y con eso se puede barrer los ids ajenos.
+      if (!(await puedeTocar(req, conEntrega))) {
+        return res.status(404).json({ error: 'Pedido no encontrado' });
+      }
+
       // Si se confirma pago con entrega automática (notify !== false)
       // pero el producto NO tiene delivery_url, BLOQUEAR sin modificar el estado en BD
       const quiereEntrega = status === 'pagado' && notify !== false;
@@ -168,12 +222,54 @@ export const orderController = {
         });
       }
 
-      const actualizado = await orderRepository.cambiarEstado(id, status, {
-        confirmedBy: esServicio ? null : req.user?.id || null,
-        note,
-        receiptCheck: receipt_check,
-        receiptMessageId: receipt_message_id ? parseInt(receipt_message_id, 10) : null
-      });
+      // Entregar dos veces el mismo pedido no es corregir un estado, es mandar
+      // el material de nuevo y volver a sellar la fecha de cobro. El tablero ya
+      // esconde el botón cuando el pedido está entregado, pero esconder un
+      // botón no es una regla: dos clics rápidos, una pestaña vieja o el guion
+      // reintentando llegan igual hasta acá.
+      //
+      // Reintentar sí se permite: si la entrega falló, el pedido quedó en
+      // 'pagado' y este camino es justamente cómo se vuelve a intentar.
+      if (quiereEntrega && conEntrega.status === 'entregado') {
+        return res.status(409).json({
+          error: 'Este pedido ya fue entregado. Si el cliente dice que no le llegó, reenviale el enlace desde el chat.',
+          code: 'ERR_YA_ENTREGADO'
+        });
+      }
+
+      // El número de operación del comprobante, que es lo único que impide que
+      // la misma captura cobre dos veces.
+      //
+      // Antes solo se guardaba en la aprobación automática de madrugada, así
+      // que todo comprobante confirmado a mano durante el día quedaba sin
+      // número registrado. Esa captura servía de nuevo esa misma noche, cuando
+      // ya no hay nadie mirando: una venta real se convertía en una llave para
+      // sacar copias gratis.
+      //
+      // Se acepta explícito, y si no viene se lo saca del texto de revisión que
+      // ya manda el guion, para no depender de que el flujo se actualice.
+      const operacion = receipt_operacion
+        || (String(receipt_check || '').match(/operacion\s*=\s*(\d+)/i) || [])[1]
+        || null;
+
+      let actualizado;
+      try {
+        actualizado = await orderRepository.cambiarEstado(id, status, {
+          confirmedBy: esServicio ? null : req.user?.id || null,
+          note,
+          receiptCheck: receipt_check,
+          receiptMessageId: receipt_message_id ? parseInt(receipt_message_id, 10) : null,
+          receiptOperacion: operacion
+        });
+      } catch (err) {
+        if (err.code === 'ERR_OPERACION_REPETIDA') {
+          return res.status(409).json({
+            error: 'Ese comprobante ya se usó para cobrar otro pedido. Revisá el número de operación antes de confirmar.',
+            code: 'ERR_OPERACION_REPETIDA'
+          });
+        }
+        throw err;
+      }
 
       if (!actualizado) return res.status(404).json({ error: 'Pedido no encontrado' });
 
@@ -241,6 +337,11 @@ export const orderController = {
         return res.status(400).json({ error: `Etapa inválida. Debe ser una de: ${ETAPAS.join(', ')}` });
       }
 
+      const pedido = await orderRepository.findConEntrega(id);
+      if (!pedido || !(await puedeTocar(req, pedido))) {
+        return res.status(404).json({ error: 'Pedido no encontrado' });
+      }
+
       const movido = await orderRepository.marcarEtapa(id, etapa);
 
       // Sin cambio significa que ya venía igual o más adelante. Es el caso
@@ -305,13 +406,20 @@ export const orderController = {
       const pedido = await orderRepository.findConEntrega(id);
       if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
 
+      if (!(await puedeTocar(req, pedido))) {
+        return res.status(404).json({ error: 'Pedido no encontrado' });
+      }
+
       // Guarda siempre el número de operación, aunque después no se entregue
       // solo. Si no se guarda acá, el comprobante que revisa una persona a la
       // mañana queda sin número registrado y esa misma captura sirve de nuevo
       // la noche siguiente.
       const operacionLimpia = String(operacion || '').replace(/[^0-9]/g, '');
       if (operacionLimpia) {
-        await orderRepository.cambiarEstado(id, pedido.status, { receiptOperacion: operacionLimpia });
+        // Con su propio método y no pasando por `cambiarEstado`: esa función
+        // vuelve a sellar la fecha de cobro cada vez que el estado es 'pagado',
+        // así que anotar el número borraba quién había confirmado el pago.
+        await orderRepository.guardarOperacion(id, operacionLimpia);
       }
 
       const rechazar = (motivo, detalle) => res.json({
@@ -359,11 +467,19 @@ export const orderController = {
       const cuentaPropia = String(process.env.PAGO_CUENTA || '').replace(/[^0-9]/g, '');
       const cuentaLeida = String(cuenta || '').replace(/[^0-9]/g, '');
 
-      if (!cuentaPropia || !cuentaLeida) {
-        return rechazar('cuenta_ilegible', 'No se pudo leer la cuenta de destino.');
+      // Hacen falta al menos cuatro dígitos de cada lado.
+      //
+      // Sin ese mínimo la comparación por terminación era una puerta abierta:
+      // si la captura estaba tapada y la visión alcanzaba a leer un solo
+      // dígito, cualquier cuenta que terminara en ese dígito daba por buena la
+      // transferencia. Una de cada diez cuentas ajenas pasaba.
+      if (cuentaPropia.length < 4 || cuentaLeida.length < 4) {
+        return rechazar('cuenta_ilegible', 'No se pudo leer la cuenta de destino con seguridad.');
       }
 
-      if (!cuentaPropia.endsWith(cuentaLeida) && !cuentaLeida.endsWith(cuentaPropia)) {
+      // Se comparan las últimas cuatro cifras y no la cadena entera porque cada
+      // banco recorta el número de forma distinta en el comprobante.
+      if (cuentaPropia.slice(-4) !== cuentaLeida.slice(-4)) {
         return rechazar('cuenta_ajena', 'La transferencia figura a otra cuenta.');
       }
 
@@ -382,16 +498,28 @@ export const orderController = {
 
       // Pasó todo. Se cobra y se entrega, marcado como aprobado por el sistema
       // para que a la mañana se pueda repasar contra el extracto.
-      const pagado = await orderRepository.cambiarEstado(id, 'pagado', {
-        confirmedBy: null,
-        autoAprobado: true,
-        receiptOperacion: operacionLimpia,
-        // Solo si es un id numérico de la base. El guion a veces manda acá el
-        // identificador de Meta ("wamid.…"), que no es un número y rompería el
-        // UPDATE justo en el momento de cobrar.
-        receiptMessageId: Number.isInteger(Number(receipt_message_id)) ? Number(receipt_message_id) : null,
-        note: `Aprobado automáticamente a las ${horaEnParaguay()}h: monto ${montoLeido}, operación ${operacionLimpia}.`
-      });
+      let pagado;
+      try {
+        pagado = await orderRepository.cambiarEstado(id, 'pagado', {
+          confirmedBy: null,
+          autoAprobado: true,
+          receiptOperacion: operacionLimpia,
+          // Solo si es un id numérico de la base. El guion a veces manda acá
+          // el identificador de Meta ("wamid.…"), que no es un número y
+          // rompería el UPDATE justo en el momento de cobrar.
+          receiptMessageId: Number.isInteger(Number(receipt_message_id)) ? Number(receipt_message_id) : null,
+          note: `Aprobado automáticamente a las ${horaEnParaguay()}h: monto ${montoLeido}, operación ${operacionLimpia}.`
+        });
+      } catch (err) {
+        // Última red: si entre el chequeo de arriba y este momento otro pedido
+        // se quedó con el mismo número, la base lo rechaza y esto queda para
+        // una persona. Que se escape a revisión humana es el resultado
+        // correcto; cobrar dos veces con el mismo comprobante no.
+        if (err.code === 'ERR_OPERACION_REPETIDA') {
+          return rechazar('operacion_repetida', 'Ese comprobante ya se usó para cobrar otro pedido.');
+        }
+        throw err;
+      }
 
       const entrega = await deliveryService.entregar(pedido, null);
 

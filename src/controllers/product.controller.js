@@ -130,8 +130,17 @@ export const productController = {
   },
 
   /**
-   * Datos de entrega de un producto. Solo con token de servicio o sesión,
-   * y pensado para llamarse DESPUÉS de confirmar el pago.
+   * Datos de entrega de un producto.
+   *
+   * El enlace de entrega ES el producto: es exactamente lo que el cliente paga.
+   * Esta dirección lo devolvía a cualquiera con sesión y al token de servicio,
+   * sin mirar si había un pedido detrás ni de qué equipo era. Con un usuario
+   * cualquiera y un bucle sobre los ids se bajaba el catálogo completo gratis.
+   *
+   * La entrega de verdad no pasa por acá: la hace `deliveryService` después de
+   * que alguien confirma el pago, leyendo el enlace directo de la base. Así que
+   * esto queda solo para el panel, y solo para administradores.
+   *
    * GET /api/products/:id/delivery
    */
   async getDelivery(req, res) {
@@ -139,8 +148,18 @@ export const productController = {
       const id = parseInt(req.params.id, 10);
       if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
 
+      if (req.user?.role !== 'admin' && req.user?.role !== 'superadmin') {
+        return res.status(403).json({ error: 'Solo un administrador puede ver el enlace de entrega.' });
+      }
+
       const producto = await productRepository.findById(id);
       if (!producto) return res.status(404).json({ error: 'Producto no encontrado' });
+
+      // Aislamiento por equipo: un administrador de un equipo no tiene por qué
+      // ver el material que vende otro.
+      if (req.user?.team_id && producto.team_id && producto.team_id !== req.user.team_id) {
+        return res.status(404).json({ error: 'Producto no encontrado' });
+      }
 
       return res.json({
         id: producto.id,

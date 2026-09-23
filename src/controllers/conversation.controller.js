@@ -41,17 +41,39 @@ export const conversationController = {
         offset: parseInt(offset, 10) || 0
       });
 
-      // Auto-enriquecer contactos de Facebook / Instagram sin foto o nombre real
+      // Completar foto y nombre real de los contactos de Facebook e Instagram
+      // que todavía no los tienen.
+      //
+      // Esto vive dentro del listado, y el listado se pide cada cinco segundos
+      // por cada asesor con la bandeja abierta. Sin freno, un contacto sin foto
+      // —que en Instagram es lo normal— generaba una llamada a Meta cada cinco
+      // segundos para siempre, porque el fallo no se recordaba en ningún lado.
+      // Con cinco por tanda y cinco asesores eran trescientas llamadas por
+      // minuto: Meta corta mucho antes de eso, y cuando corta deja de andar
+      // también lo que sí importa.
+      //
+      // Ahora cada contacto se intenta como mucho tres veces, y nunca dos
+      // veces dentro de las mismas seis horas.
+      const AHORA = Date.now();
+      const ESPERA_MS = 6 * 60 * 60 * 1000;
+      const MAX_INTENTOS = 3;
+
       const enrichTargets = conversations.filter(c =>
         (c.platform === 'facebook' || c.platform === 'instagram') &&
         (!c.contact_avatar || /^Usuario\s+\d+$/i.test(c.contact_name || '')) &&
-        c.platform_user_id
-      ).slice(0, 5);
+        c.platform_user_id &&
+        (c.perfil_intentos || 0) < MAX_INTENTOS &&
+        (!c.perfil_ultimo_intento || (AHORA - new Date(c.perfil_ultimo_intento).getTime()) > ESPERA_MS)
+      ).slice(0, 2);
 
       if (enrichTargets.length > 0) {
         await Promise.allSettled(
           enrichTargets.map(async (c) => {
             try {
+              // Se anota el intento antes de hacerlo: si se anotara solo al
+              // salir bien, el que falla siempre se reintenta siempre.
+              await contactRepository.marcarIntentoPerfil(c.contact_id);
+
               const fullChannel = await channelRepository.findById(c.channel_id);
               if (!fullChannel?.accessToken) return;
               const profile = await graphApiService.fetchUserProfile({
@@ -107,13 +129,20 @@ export const conversationController = {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      // Auto-enriquecer si falta foto o nombre
+      // Auto-enriquecer si falta foto o nombre. Con el mismo freno que el
+      // listado: tres intentos como máximo, y nunca dos dentro de seis horas.
+      const puedeIntentar = (conv.perfil_intentos || 0) < 3 &&
+        (!conv.perfil_ultimo_intento ||
+          (Date.now() - new Date(conv.perfil_ultimo_intento).getTime()) > 6 * 60 * 60 * 1000);
+
       if (
         (conv.platform === 'facebook' || conv.platform === 'instagram') &&
         (!conv.contact_avatar || /^Usuario\s+\d+$/i.test(conv.contact_name || '')) &&
-        conv.platform_user_id
+        conv.platform_user_id &&
+        puedeIntentar
       ) {
         try {
+          await contactRepository.marcarIntentoPerfil(conv.contact_id);
           const fullChannel = await channelRepository.findById(conv.channel_id);
           if (fullChannel?.accessToken) {
             const profile = await graphApiService.fetchUserProfile({

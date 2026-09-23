@@ -50,6 +50,32 @@ export const logRepository = {
       [limit]
     );
     return rows;
+  },
+
+  /**
+   * Borra los registros de webhook más viejos que N días.
+   *
+   * Acá se guarda el payload crudo de CADA evento que manda Meta, y los
+   * eventos no son solo los mensajes: por cada mensaje que sale llegan además
+   * tres acuses —enviado, entregado, leído—, cada uno con su JSON entero. La
+   * tabla tiene un índice GIN sobre ese JSON, así que cada fila se paga dos
+   * veces, al escribirla y al indexarla.
+   *
+   * Sirven para entender qué pasó cuando algo falla, y eso se mira en las
+   * horas siguientes, no en marzo del año que viene. Sin nadie que las borre,
+   * unos cientos de conversaciones por día son más de cien megas por mes
+   * creciendo para siempre.
+   *
+   * @param {number} dias
+   * @returns {Promise<number>} Cuántas filas se borraron
+   */
+  async purgarViejos(dias = 7) {
+    const { rowCount } = await query(
+      `DELETE FROM webhook_logs
+       WHERE created_at < CURRENT_TIMESTAMP - ($1 || ' days')::interval`,
+      [String(Math.max(1, dias))]
+    );
+    return rowCount || 0;
   }
 };
 

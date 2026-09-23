@@ -163,6 +163,26 @@ export const contactRepository = {
       [name ? name.trim() : null, phoneOrUsername ? phoneOrUsername.trim() : null, avatarUrl ? avatarUrl.trim() : null, id]
     );
     return rows[0] || null;
+  },
+
+  /**
+   * Anota que se intentó completar el perfil de este contacto.
+   *
+   * Se llama ANTES de preguntarle a Meta, no después, y a propósito: si se
+   * anotara solo cuando sale bien, un contacto que falla siempre se
+   * reintentaría siempre. Lo que hay que recordar es el intento, no el éxito.
+   *
+   * @param {number} id
+   * @returns {Promise<void>}
+   */
+  async marcarIntentoPerfil(id) {
+    await query(
+      `UPDATE contacts
+       SET perfil_intentos = perfil_intentos + 1,
+           perfil_ultimo_intento = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [id]
+    );
   }
 };
 

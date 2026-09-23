@@ -251,7 +251,15 @@ export const conversationRepository = {
         c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id,
         c.source_ad_id,
         ct.name as contact_name, ct.phone_or_username as contact_phone, ct.avatar_url as contact_avatar,
-        COALESCE(ch.platform, ct.platform) as platform, 
+        -- Cuántas veces se intentó completar el perfil y cuándo fue la última.
+        -- Sin estos dos campos, la bandeja le vuelve a preguntar a Meta por el
+        -- mismo contacto cada cinco segundos, para siempre.
+        ct.perfil_intentos, ct.perfil_ultimo_intento,
+        -- Sin esto el completado de perfiles de la bandeja era código muerto:
+        -- filtraba por un campo que esta consulta nunca devolvía, así que
+        -- ningún contacto de Instagram salía jamás de "Usuario 4821" sin foto.
+        ct.platform_user_id,
+        COALESCE(ch.platform, ct.platform) as platform,
         COALESCE(ch.name, 'Canal Desconectado') as channel_name, 
         COALESCE(ch.color_tag, '#1877F2') as channel_color, 
         ch.channel_identifier,
