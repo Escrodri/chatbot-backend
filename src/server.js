@@ -47,6 +47,18 @@ server.listen(config.port, () => {
   console.log(`📡 [HEALTH] Comprobación de estado disponible en http://localhost:${config.port}/health`);
   console.log(`🔒 [SECURITY] Validación HMAC-SHA256 y cifrado AES-256-GCM activos`);
 
+  // Marca de versión de la verificación de comprobantes.
+  //
+  // Existe por una tarde entera perdida en no poder distinguir "el arreglo
+  // está mal" de "el arreglo no llegó al servidor". Los dos se ven igual desde
+  // afuera: el comprobante no se entrega. Con esta línea, una mirada al
+  // arranque contesta cuál de las dos cosas es.
+  console.log(
+    `🧾 [ENTREGA AUTO] Verificación v2: la IA decide sola, la cuenta se lee del chat. ` +
+    `Estado: ${config.entregaAutomatica.habilitada ? 'ACTIVA' : 'APAGADA (ENTREGA_AUTO_NOCTURNA=false)'}, ` +
+    `tope ${config.entregaAutomatica.maxPorDia}/día.`
+  );
+
   limpiarRegistros();
   const limpieza = setInterval(limpiarRegistros, 24 * 60 * 60 * 1000);
   // Que el temporizador no sea razón para que el proceso no pueda terminar.

@@ -682,18 +682,24 @@ export const orderController = {
         await orderRepository.guardarOperacion(id, claveComprobante);
       }
 
-      // ¿Corresponde aprobar sin persona, ahora, para este número?
+      // Un solo interruptor, y vive en el entorno del servidor.
       //
-      // Antes la respuesta era solo la hora. Ahora sale del modo que esté
-      // puesto en el tablero —noche, siempre o apagado—, que es lo que permite
-      // encender la aprobación automática al salir un rato sin tener que
-      // reiniciar el servidor. Los números de prueba entran siempre, para
-      // poder probar el circuito completo sin esperar a la madrugada.
-      const cuando = await autoReviewService.corresponde(
-        pedido.contact_phone || null
-      );
-      if (!cuando.puede) {
-        return rechazar(cuando.motivo, cuando.detalle);
+      // Acá había un segundo sistema encima: un modo guardado en la base
+      // —noche, siempre, apagado— que se cambiaba desde el tablero. Eran dos
+      // mecanismos decidiendo lo mismo, y cada uno sumaba sus propias formas
+      // de fallar: que la tabla de ajustes no se pudiera leer, que el modo
+      // quedara en 'noche' de día, que el panel no llegara al servidor. Un
+      // comprobante bueno se rechazaba y desde afuera no se podía saber cuál
+      // de los dos lo había frenado.
+      //
+      // Queda uno solo: si ENTREGA_AUTO_NOCTURNA no está en false, el sistema
+      // verifica y entrega. El horario, el modo y el tablero se vuelven a
+      // sumar cuando esto esté andando y se pueda probar de a una cosa.
+      if (!envConfig.entregaAutomatica.habilitada) {
+        return rechazar(
+          'desactivada',
+          'La entrega automática está apagada (ENTREGA_AUTO_NOCTURNA=false).'
+        );
       }
 
       if (!pedido.delivery_url || !pedido.delivery_url.trim()) {
@@ -754,30 +760,36 @@ export const orderController = {
       // tres, no se rechaza el pago, se manda a revisión humana.
       const cuentaLeida = String(cuenta || '').replace(/[^0-9]/g, '');
 
-      // Los datos propios salen del panel, con el entorno como respaldo. Nunca
-      // de lo que manda el guion: si el guion pudiera decir contra qué
-      // compararse, alcanzaría con un flujo mal armado para regalar todo.
-      let nuestros = await datosPagoService.leer();
-
-      // Si nadie la cargó en ningún lado, se saca del mensaje que el propio
-      // bot le escribió a esta persona en este chat. Ver `leerDelChat`: la
-      // pregunta que termina contestando es la correcta, "¿transfirió a donde
-      // le dijimos?", y no depende de que el mismo dato esté cargado dos veces
-      // en dos lugares distintos.
-      if (!nuestros.configurado) {
-        const delChat = await datosPagoService.leerDelChat(pedido.conversation_id);
-        if (delChat) nuestros = delChat;
-      }
+      // Contra qué se compara: PRIMERO el mensaje que el bot ya le escribió a
+      // esta persona en este chat.
+      //
+      // El orden importa y antes estaba al revés. Buscar primero en el panel y
+      // en el entorno significaba depender de que alguien hubiera cargado la
+      // cuenta en un tercer lugar, además de en el guion; y como no estaba
+      // cargada, se rechazaban pagos reales con "falta configurar la cuenta".
+      //
+      // El mensaje del chat, en cambio, existe SIEMPRE: el bot no puede haber
+      // recibido un comprobante sin haber mandado antes los datos para pagar.
+      // Y es el dato correcto, porque la pregunta que hay que contestar es
+      // exactamente "¿transfirió a donde le dijimos que transfiera?".
+      //
+      // Nada de esto viene del guion: se lee de nuestra base, de un mensaje
+      // que salió de nuestro servidor.
+      let nuestros = await datosPagoService.leerDelChat(pedido.conversation_id);
+      if (!nuestros) nuestros = await datosPagoService.leer();
 
       const propios = datosPagoService.identificadores(nuestros);
       const titularPropio = normalizarNombre(nuestros.titular);
       const titularLeido = normalizarNombre(titular);
 
       if (!propios.length && !titularPropio.length) {
+        console.warn(
+          `🚨 [ENTREGA AUTO] Pedido #${id}: no se pudo determinar la cuenta propia. ` +
+          'No está en el chat, ni en el panel, ni en el entorno.'
+        );
         return rechazar(
           'sin_cuenta_configurada',
-          'Falta cargar la cuenta que recibe las transferencias. Se carga en Pedidos, ' +
-          'en el panel de aprobación automática.'
+          'No se pudo determinar a qué cuenta le dijimos que transfiera.'
         );
       }
 
@@ -867,7 +879,7 @@ export const orderController = {
           receiptMessageId: idDeMensaje(receipt_message_id),
           note:
             `Aprobado automáticamente a las ${horaEnParaguay()}h ` +
-            `(modo ${cuando.modo}${cuando.por_prueba ? ', número de prueba' : ''}): ` +
+            `(verificación automática): ` +
             `monto ${montoLeido}, ${operacionLimpia ? 'operación ' + operacionLimpia : 'huella ' + huella}, ` +
             `verificado por ${[coincideCuenta ? 'cuenta/alias' : null, coincideTitular ? 'titular' : null].filter(Boolean).join(' y ')}.`
         });
@@ -907,7 +919,7 @@ export const orderController = {
 
       console.log(
         `🌙 [ENTREGA AUTO] Pedido #${id} cobrado y entregado sin revisión humana ` +
-        `(${horaEnParaguay()}h, modo ${cuando.modo}${cuando.por_prueba ? ', número de prueba' : ''}, ` +
+        `(${horaEnParaguay()}h, ` +
         `${operacionLimpia ? 'operación ' + operacionLimpia : 'huella ' + huella}).`
       );
 
@@ -917,8 +929,8 @@ export const orderController = {
         detalle: entrega.detalle || null,
         estado: estadoFinal.status,
         hora_paraguay: horaEnParaguay(),
-        modo: cuando.modo,
-        por_prueba: cuando.por_prueba
+        verificado_por: [coincideCuenta ? 'cuenta' : null, coincideTitular ? 'titular' : null]
+          .filter(Boolean).join('+') || null
       });
     } catch (error) {
       // Ante cualquier problema, el comprobante queda para una persona. Nunca
