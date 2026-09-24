@@ -10,6 +10,7 @@ import { mediaService } from '../services/media.service.js';
 import { conversionsService } from '../services/conversions.service.js';
 import { conversionRepository } from '../repositories/conversion.repository.js';
 import { automationService } from '../services/automation.service.js';
+import { deliveryService } from '../services/delivery.service.js';
 import { esTelefonoDePrueba } from '../config/env.config.js';
 
 export const conversationController = {
@@ -784,6 +785,39 @@ export const conversationController = {
       return res.json({ success: true, molesto_at: cuando });
     } catch (error) {
       return res.status(500).json({ error: 'Error al marcar la conversación: ' + error.message });
+    }
+  },
+
+  /**
+   * Marcar el chat para que lo revise una persona.
+   *
+   * La revisión automática de comprobantes ya pone esta etiqueta sola cada vez
+   * que decide no entregar. Esto existe para los casos que ni siquiera llegan
+   * hasta ella y se resuelven antes, en el guion: el comprobante cuyo monto no
+   * alcanza, por ejemplo, que se contesta ahí mismo con un mensaje mejor que
+   * el genérico y por eso nunca toca el backend.
+   *
+   * No corta nada, no pausa al bot y el cliente no se entera. Solo deja la
+   * marca para que ese chat aparezca en el filtro junto a los demás.
+   *
+   * POST /api/conversations/:id/verificar   body: { motivo?, detalle? }
+   */
+  async marcarParaVerificar(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'ID de conversación inválido' });
+
+      const conv = await conversationRepository.findById(id);
+      if (!conv) return res.status(404).json({ error: 'Conversación no encontrada' });
+
+      const motivo = String(req.body?.motivo || '').trim().slice(0, 60) || null;
+      const detalle = String(req.body?.detalle || '').trim().slice(0, 300) || null;
+
+      const etiquetada = await deliveryService.marcarParaVerificar(id, motivo, detalle);
+
+      return res.json({ success: true, etiquetada, motivo });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al marcar para verificar: ' + error.message });
     }
   },
 

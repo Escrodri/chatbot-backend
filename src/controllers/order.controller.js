@@ -87,6 +87,54 @@ function construirHuella({ fecha, hora, monto }) {
  * @param {string|null|undefined} valor
  * @returns {string[]}
  */
+/**
+ * Cuántas horas hace que se hizo la transferencia, según la propia captura.
+ *
+ * La fecha viene como ddmmaaaa y la hora como hhmm, las dos en hora de
+ * Paraguay, que es UTC-3 todo el año. Devuelve null cuando no se pueden leer:
+ * quien llama decide, y decide no bloquear por eso, porque un comprobante sin
+ * fecha legible no es un comprobante sospechoso, es uno mal leído.
+ *
+ * El número puede salir negativo si la captura dice una hora que todavía no
+ * llegó. Un ratito de diferencia es normal —relojes, redondeos—, pero varias
+ * horas adelantado no es un reloj: es una fecha que no salió de un banco.
+ *
+ * @param {{fecha: *, hora: *}} datos
+ * @returns {number|null} Horas de antigüedad, negativas si está en el futuro
+ */
+function antiguedadEnHoras({ fecha, hora }) {
+  const f = String(fecha || '').trim();
+  const h = String(hora || '').trim();
+  if (!/^\d{8}$/.test(f) || !/^\d{4}$/.test(h)) return null;
+
+  const dia = Number(f.slice(0, 2));
+  const mes = Number(f.slice(2, 4));
+  const anio = Number(f.slice(4, 8));
+  const hh = Number(h.slice(0, 2));
+  const mm = Number(h.slice(2, 4));
+
+  if (dia < 1 || dia > 31 || mes < 1 || mes > 12 || anio < 2000 || hh > 23 || mm > 59) {
+    return null;
+  }
+
+  // Una fecha imposible —31 de febrero, 30 de febrero— no la rechaza nadie:
+  // Date.UTC la corre en silencio al 3 de marzo y devuelve una fecha que no
+  // estaba en la captura. Se comprueba a mediodía, lejos de los bordes del
+  // día, que el día siga siendo el que se leyó.
+  const control = new Date(Date.UTC(anio, mes - 1, dia, 12, 0, 0));
+  if (
+    control.getUTCFullYear() !== anio ||
+    control.getUTCMonth() !== mes - 1 ||
+    control.getUTCDate() !== dia
+  ) {
+    return null;
+  }
+
+  // Paraguay es UTC-3 todo el año desde 2024: no hay horario de verano que
+  // corregir, así que la hora local más tres horas es la hora universal.
+  return (Date.now() - Date.UTC(anio, mes - 1, dia, hh + 3, mm, 0)) / 3600000;
+}
+
 function normalizarNombre(valor) {
   return String(valor || '')
     .normalize('NFD')
@@ -658,12 +706,39 @@ export const orderController = {
       const huella = construirHuella({ fecha, hora, monto });
       const claveComprobante = operacionLimpia || huella;
 
-      const rechazar = (motivo, detalle) => res.json({
-        entregado: false,
-        motivo,
-        detalle,
-        hora_paraguay: horaEnParaguay()
-      });
+      // Todo lo que no termina en entrega queda marcado para que alguien mire.
+      //
+      // Esto está acá, en el único lugar por donde salen TODOS los rechazos, y
+      // no repartido por cada uno. Cada motivo nuevo que se agregue de ahora en
+      // más queda cubierto solo, que es la única forma de que no se escape
+      // ninguno dentro de seis meses.
+      //
+      // La marca se pone sin esperarla. Del otro lado hay alguien mirando la
+      // pantalla del teléfono, y no tiene por qué esperar a que se escriba una
+      // etiqueta para recibir su respuesta. Si la etiqueta falla se pierde la
+      // marca; si la respuesta se demora, se pierde el cliente.
+      const rechazar = (motivo, detalle) => {
+        // El único que no se marca: el cliente reenvía la captura de algo que
+        // ya se le entregó. Eso no es un problema, es alguien contento, y
+        // llenaría el filtro de chats que no hay que revisar. Un filtro con
+        // ruido deja de mirarse a la semana.
+        if (motivo !== 'ya_estaba_pago') {
+          Promise.resolve()
+            .then(() => deliveryService.marcarParaVerificar(pedido.conversation_id, motivo, detalle))
+            .then(() => orderRepository.anotarRevision(
+              id,
+              `sin entregar (${motivo})${detalle ? ': ' + detalle : ''}`
+            ))
+            .catch(err => console.warn('⚠️ [VERIFICAR] Quedó sin marcar:', err.message));
+        }
+
+        return res.json({
+          entregado: false,
+          motivo,
+          detalle,
+          hora_paraguay: horaEnParaguay()
+        });
+      };
 
       // El pedido ya cobrado se corta acá, antes de tocar nada.
       //
@@ -811,12 +886,37 @@ export const orderController = {
         return propio.slice(-largo) === cuentaLeida.slice(-largo);
       });
 
-      // El nombre. Se exige compartir una palabra larga —el apellido, en la
-      // práctica— porque los bancos lo escriben de cualquier manera:
-      // "RODRIGUEZ, E.", "Enmanuel R.", todo en mayúsculas, con o sin tildes.
-      const coincideTitular = titularPropio.length > 0 && titularLeido.length > 0 && (() => {
-        const palabras = new Set(titularPropio.filter(p => p.length >= 4));
-        return titularLeido.some(p => p.length >= 4 && palabras.has(p));
+      // El nombre. Tienen que coincidir DOS palabras, no una.
+      //
+      // Antes alcanzaba con una palabra larga, y en la práctica esa palabra era
+      // el apellido. En Paraguay eso no identifica a nadie: cualquier captura
+      // de una transferencia a cualquier González, cualquier Rodríguez o
+      // cualquier Benítez del país pasaba el control de destino y cobraba. No
+      // hacía falta ni falsificar nada, bastaba con una captura ajena de verdad.
+      //
+      // Con dos palabras hay que compartir nombre Y apellido, que ya es una
+      // persona y no un padrón entero. Se comparan de a palabras, y no la
+      // cadena entera, porque los bancos las ordenan y recortan a su gusto:
+      // "RODRIGUEZ, ENMANUEL", "Enmanuel Rodriguez", en mayúsculas, con o sin
+      // tildes; todas esas formas comparten las mismas dos palabras.
+      //
+      // Lo que se pierde es el comprobante que muestra "E. RODRIGUEZ" y ninguna
+      // cuenta. Ese no se rechaza: lo mira una persona. Perder la inmediatez en
+      // un caso raro pesa mucho menos que regalar el material a cualquiera que
+      // comparta apellido.
+      const coincideTitular = (() => {
+        if (!titularPropio.length || !titularLeido.length) return false;
+
+        const propias = new Set(titularPropio.filter(p => p.length >= 3));
+        const compartidas = new Set(
+          titularLeido.filter(p => p.length >= 3 && propias.has(p))
+        );
+
+        // Si nuestro propio titular es una sola palabra —un nombre de fantasía,
+        // un comercio—, no se le puede exigir dos. Ahí esa única palabra tiene
+        // que estar, y alcanza.
+        const exigidas = propias.size >= 2 ? 2 : 1;
+        return compartidas.size >= exigidas;
       })();
 
       if (!coincideCuenta && !coincideTitular) {
@@ -841,6 +941,53 @@ export const orderController = {
           'sin_identificador',
           'El comprobante no muestra número de operación ni fecha y hora legibles.'
         );
+      }
+
+      // Que la transferencia sea de recién.
+      //
+      // Los controles de arriba comprueban que el comprobante sea coherente, y
+      // una captura vieja y auténtica es perfectamente coherente: el monto
+      // alcanza, el destino somos nosotros, y ese número no se usó nunca
+      // porque nunca se usó para comprar nada. Cualquiera que alguna vez le
+      // haya transferido plata a este negocio se queda con una imagen que
+      // cobra, y cobra cada vez que abra una conversación nueva.
+      //
+      // La fecha corta eso: el comprobante tiene que ser de una transferencia
+      // que acaba de pasar, que es lo que se está afirmando al mandarlo.
+      //
+      // Si la fecha no se pudo leer no se bloquea: eso es una lectura mala, no
+      // un fraude, y el número de operación sigue impidiendo que la misma
+      // captura cobre dos veces.
+      const horasMax = Number(envConfig.entregaAutomatica.horasMaximasComprobante) || 0;
+      const antiguedad = antiguedadEnHoras({ fecha, hora });
+
+      if (horasMax > 0 && antiguedad !== null) {
+        if (antiguedad > horasMax) {
+          const dias = Math.floor(antiguedad / 24);
+          console.warn(
+            `🚨 [ENTREGA AUTO] Pedido #${id}: comprobante de hace ${Math.round(antiguedad)}h ` +
+            `(${fecha} ${hora}). El tope son ${horasMax}h. Se manda a revisión humana.`
+          );
+          return rechazar(
+            'comprobante_viejo',
+            dias >= 1
+              ? `El comprobante es del ${fecha.slice(0, 2)}/${fecha.slice(2, 4)}, hace ${dias} día(s).`
+              : `El comprobante tiene ${Math.round(antiguedad)} horas.`
+          );
+        }
+
+        // Adelantado en el tiempo. Un par de horas puede ser un reloj o un
+        // redondeo; medio día no es ninguna de las dos cosas.
+        if (antiguedad < -12) {
+          console.warn(
+            `🚨 [ENTREGA AUTO] Pedido #${id}: comprobante con fecha futura ` +
+            `(${fecha} ${hora}). Se manda a revisión humana.`
+          );
+          return rechazar(
+            'fecha_futura',
+            'El comprobante figura con una fecha que todavía no llegó.'
+          );
+        }
       }
 
       // El tope del día. Ver la nota en la configuración: ningún control
@@ -915,6 +1062,19 @@ export const orderController = {
         const entregado = await orderRepository.cambiarEstado(id, 'entregado', { autoAprobado: true });
         if (entregado) estadoFinal = entregado;
         await deliveryService.marcarClienteQueCompro(pedido.conversation_id);
+      } else {
+        // Este es el peor caso de todos y el que menos se nota: el comprobante
+        // pasó todos los controles, el pedido quedó COBRADO, y el mensaje con
+        // el enlace no salió. Del otro lado hay alguien que pagó, a quien el
+        // sistema ya le dio por bueno el pago, y que no recibió nada.
+        //
+        // No entra por `rechazar` —acá no se rechazó nada— así que la marca
+        // hay que ponerla a mano. Es la que más urge de todas.
+        await deliveryService.marcarParaVerificar(
+          pedido.conversation_id,
+          'cobrado_sin_entregar',
+          entrega.detalle || entrega.motivo || 'El enlace no se pudo enviar.'
+        );
       }
 
       const conv = await conversationRepository.findById(pedido.conversation_id);
@@ -943,6 +1103,18 @@ export const orderController = {
     } catch (error) {
       // Ante cualquier problema, el comprobante queda para una persona. Nunca
       // al revés.
+      //
+      // Y queda marcado, que es distinto de "queda para una persona": sin la
+      // etiqueta, un error acá se ve desde el tablero exactamente igual que un
+      // chat donde nunca pasó nada. La falla que más cuesta encontrar es la
+      // que no deja rastro en ningún lado salvo el registro del servidor.
+      const conversacion = parseInt(req.body?.conversation_id, 10);
+      if (Number.isInteger(conversacion) && conversacion > 0) {
+        await deliveryService
+          .marcarParaVerificar(conversacion, 'error', error.message)
+          .catch(() => {});
+      }
+
       return res.status(500).json({ entregado: false, motivo: 'error', error: error.message });
     }
   }

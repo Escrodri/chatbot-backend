@@ -268,6 +268,69 @@ export const deliveryService = {
       console.warn('⚠️ [ETIQUETA] No se pudo marcar como cliente:', err.message);
       return false;
     }
+  },
+
+  /**
+   * Marca la conversación para que la mire una persona.
+   *
+   * Cada vez que un comprobante NO termina en entrega —porque la lectura
+   * falló, porque el destino no es nuestro, porque el monto no alcanza, porque
+   * la captura es vieja— el cliente recibe una respuesta y la conversación
+   * sigue. Hasta acá eso se terminaba ahí: una línea en el registro del
+   * servidor, que nadie lee, y un chat más entre cientos en la bandeja.
+   *
+   * El problema es que esos son exactamente los chats que hay que mirar. Uno
+   * es alguien que probó con una captura ajena, y no pasa nada. Otro es
+   * alguien que pagó de verdad y cuya captura el modelo no supo leer, y ese
+   * está esperando un material que ya pagó. Desde afuera los dos se ven igual,
+   * y la única forma de distinguirlos es abrir el chat y mirar la imagen.
+   *
+   * La etiqueta los junta en un solo filtro. No corta nada, no pausa al bot y
+   * no le dice nada al cliente: solo deja la marca para que alguien pase.
+   *
+   * @param {number} conversationId
+   * @param {string|null} motivo Por qué no se entregó, en una palabra
+   * @param {string|null} detalle Lo que se le explicaría a una persona
+   */
+  async marcarParaVerificar(conversationId, motivo = null, detalle = null) {
+    if (!conversationId) return false;
+
+    try {
+      const conv = await conversationRepository.findById(conversationId);
+      if (!conv) return false;
+
+      const etiqueta = await tagRepository.asegurar({
+        teamId: conv.team_id || null,
+        name: 'Verificar',
+        // Naranja y no rojo: "Reclamo" ya es rojo y son cosas distintas. Esto
+        // no es un cliente enojado, es un comprobante que quedó a medias.
+        color: '#ea580c'
+      });
+      if (!etiqueta) return false;
+
+      const etiquetas = await tagRepository.assign(conversationId, etiqueta.id, null);
+
+      // Que aparezca en la bandeja sin recargar, como cualquier otra etiqueta.
+      try {
+        socketManager.emitConversationUpdated(conv.channel_id, {
+          id: conversationId,
+          tags: etiquetas
+        });
+      } catch {
+        // La etiqueta ya quedó guardada. El aviso en vivo es un extra.
+      }
+
+      console.warn(
+        `🏷️ [VERIFICAR] Conversación #${conversationId} marcada para revisar` +
+        `${motivo ? ` (${motivo})` : ''}${detalle ? `: ${detalle}` : ''}`
+      );
+      return true;
+    } catch (err) {
+      // Nunca puede romper la respuesta al cliente. Perder la marca es malo;
+      // dejar de contestarle a alguien que está esperando, peor.
+      console.warn('⚠️ [VERIFICAR] No se pudo poner la etiqueta:', err.message);
+      return false;
+    }
   }
 };
 

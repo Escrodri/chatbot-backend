@@ -443,6 +443,37 @@ export const orderRepository = {
    * @param {boolean} seEnvio Si no se envió, no se toca la fecha del último envío
    */
   /**
+   * Deja escrito en el pedido por qué la revisión automática no entregó.
+   *
+   * Es el par de la etiqueta "Verificar": la etiqueta dice CUÁLES chats mirar,
+   * esto dice QUÉ pasó en cada uno. Sin lo segundo hay que reconstruirlo desde
+   * la imagen, y "no entregó" y "no entregó porque la transferencia figura a
+   * otra cuenta" llevan a revisiones muy distintas.
+   *
+   * Va en `note` y no en `receipt_check`, aunque el nombre del segundo suene
+   * más apropiado: `receipt_check` lo pisa el guion con los datos leídos unos
+   * milisegundos después de esta llamada, así que el motivo duraría lo que
+   * tarda la siguiente petición. `note` no lo escribe nadie más en el camino
+   * del rechazo.
+   *
+   * No toca el estado: el pedido sigue donde estaba y lo mueve una persona.
+   *
+   * @param {number} id
+   * @param {string} texto
+   */
+  async anotarRevision(id, texto) {
+    const { rows } = await query(
+      `UPDATE orders
+          SET note = $1,
+              updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+        RETURNING id, note`,
+      [String(texto || '').trim().slice(0, 500) || null, id]
+    );
+    return rows[0] || null;
+  },
+
+  /**
    * Cuántas entregas hizo el sistema solo en lo que va del día paraguayo.
    *
    * El día se corta en Asunción y no en UTC porque es el día del negocio: un

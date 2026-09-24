@@ -216,6 +216,25 @@ export const envConfig = Object.freeze({
     // lo que habría pasado si esto no existiera. Lo único que se pierde es la
     // inmediatez, y solo a partir del pedido número quince de un mismo día.
     maxPorDia: parseInt(process.env.ENTREGA_AUTO_MAX_DIA || '15', 10),
+
+    // Cuántas horas de antigüedad se le acepta a un comprobante.
+    //
+    // Es el control que faltaba, y el que más fraude tapa. Todo lo demás mira
+    // si el comprobante es COHERENTE —que el monto alcance, que el destino sea
+    // nuestro, que ese número no se haya usado ya—, y una captura vieja y real
+    // pasa las tres sin despeinarse. Cualquiera que alguna vez le haya
+    // transferido plata a este negocio, por esto o por cualquier otra cosa, se
+    // queda con una imagen que sirve para cobrar para siempre: nunca la usó
+    // antes, así que tampoco figura repetida.
+    //
+    // Con un plazo, esa imagen sirve tres días y después es una foto vieja.
+    // Obliga a que el comprobante sea de una transferencia que acaba de pasar,
+    // que es exactamente lo que se está afirmando al mandarlo.
+    //
+    // Tres días y no uno porque hay quien transfiere el viernes a la noche y
+    // escribe el lunes, y esa venta es buena. Vencido el plazo no se rechaza el
+    // pago: lo revisa una persona.
+    horasMaximasComprobante: parseInt(process.env.ENTREGA_AUTO_HORAS_MAX || '72', 10),
   },
 
   // Recuperación de abandonos: volver a escribirle al que se quedó a mitad.

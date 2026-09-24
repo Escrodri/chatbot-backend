@@ -33,6 +33,11 @@ conversationRouter.post('/:id/handover', requireAuthOrService, conversationContr
 // llegue un "¿te quedó alguna duda?" dos horas después de habernos puteado.
 conversationRouter.post('/:id/molesto', requireAuthOrService, conversationController.marcarMolesto);
 
+// Este chat quedó a medias y hay que mirarlo. La revisión de comprobantes pone
+// la etiqueta sola cada vez que no entrega; esta ruta es para lo que se resuelve
+// antes, en el guion, y por eso nunca llega hasta ella.
+conversationRouter.post('/:id/verificar', requireAuthOrService, conversationController.marcarParaVerificar);
+
 // Reintentar el envío de un mensaje que Meta rechazó (conserva el adjunto)
 conversationRouter.post('/:id/messages/:messageId/retry', requireAuth, conversationController.retryMessage);
 
