@@ -55,16 +55,24 @@ function idDeMensaje(valor) {
  * @returns {string} Vacío si no alcanza para armarla
  */
 function construirHuella({ fecha, hora, monto }) {
-  const d = (v) => String(v || '').replace(/[^0-9]/g, '');
+  const f = String(fecha || '').trim();
+  const h = String(hora || '').trim();
+  const m = String(monto || '').replace(/[^0-9]/g, '');
 
-  const f = d(fecha);
-  const h = d(hora);
-  const m = d(monto);
+  // Forma exacta o nada.
+  //
+  // Antes esto limpiaba los caracteres raros y seguía adelante con lo que
+  // quedara. Eso convertía una lectura rota en una huella con pinta de válida:
+  // el modelo devolvió una vez la hora seguida de su propio razonamiento
+  // —"0048. They included recipient name..."— y de ahí salían dígitos
+  // suficientes para armar algo.
+  //
+  // Una fecha son ocho dígitos y una hora son cuatro. Cualquier otra cosa no
+  // es un dato mal escrito: es una lectura que no se entendió, y con eso no se
+  // cobra.
+  if (!/^\d{8}$/.test(f) || !/^\d{4}$/.test(h) || !m) return '';
 
-  // Una fecha necesita al menos día, mes y año corto; una hora, hora y minuto.
-  if (f.length < 6 || h.length < 3 || !m) return '';
-
-  return `9${f}${h.padStart(4, '0').slice(0, 4)}${m}`;
+  return `9${f}${h}${m}`;
 }
 
 /**
