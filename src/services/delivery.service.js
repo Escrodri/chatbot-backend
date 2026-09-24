@@ -181,23 +181,23 @@ export const deliveryService = {
 
       await conversationRepository.updateOutboundMessage(conv.id, texto);
 
-      // Confirmar un pago o rechazar un comprobante lo decide una persona
-      // mirando el extracto del banco, así que el chat queda en sus manos.
+      // Entregar NO apaga el bot.
       //
-      // Sin esto el bot seguía figurando como el que contesta, y el "muchas
-      // gracias" que llega después de la entrega volvía a caer en el guion de
-      // venta, que le ofrecía a alguien que acaba de comprar el material que
-      // recién le mandaron. El reloj del handover se sella acá, así que si
-      // nadie sigue la conversación, el bot la retoma solo pasadas las horas
-      // configuradas.
-      await conversationRepository.updateBotStatus(conv.id, 'handed_over', actorUserId);
-
+      // Acá se pasaba el chat a una persona apenas salía el enlace. La idea
+      // era evitar que el "muchas gracias" volviera a caer en el guion de
+      // venta. El costo real era peor: quien acaba de comprar es justo el que
+      // más pregunta —cómo lo abro, se puede imprimir, me anda en el celular—
+      // y del otro lado ya no contestaba nadie hasta que alguien mirara la
+      // bandeja. Silencio después de cobrar.
+      //
+      // Ahora el chat sigue con el bot. Que no le vuelva a vender lo resuelve
+      // el guion, que sabe en qué etapa está esta persona: eso es un problema
+      // de qué contestar, no una razón para dejar de contestar.
       socketManager.emitMessageSent(conv.channel_id, guardado);
       socketManager.emitConversationUpdated(conv.channel_id, {
         id: conv.id,
         last_message_text: texto,
         last_message_time: new Date(),
-        bot_status: 'handed_over',
         order_status: estadoParaBandeja
       });
 
