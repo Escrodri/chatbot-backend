@@ -276,6 +276,23 @@ export const envConfig = Object.freeze({
     maxPorPasada: parseInt(process.env.RECUPERACION_MAX_POR_PASADA || '40', 10),
   },
 
+  // Precios especiales: cuánto duran y cuánta tolerancia tienen.
+  //
+  // `recuperacionHoras` es cuánto vale el descuento que ofrece el seguimiento
+  // desde que se manda. Antes no vencía nunca: quien recibía "te lo dejo en
+  // 15 mil" un martes lo seguía teniendo tres meses después.
+  //
+  // `graciaHoras` es la tolerancia después de que una oferta vence, para las
+  // que no traen la suya propia (las campañas la configuran cada una). Existe
+  // por el que transfirió a las 23:50 del último día y manda la captura al
+  // otro día a la mañana: pagó dentro de la promo y no tiene por qué perderla.
+  // Al cliente no se le anuncia: se le dice la fecha de corte y la gracia es
+  // una cortesía silenciosa.
+  ofertas: {
+    recuperacionHoras: parseInt(process.env.OFERTA_RECUPERACION_HORAS || '72', 10),
+    graciaHoras: parseInt(process.env.OFERTA_GRACIA_HORAS || '24', 10),
+  },
+
   // Números con los que se prueba el flujo.
   //
   // Reiniciar una conversación borra sus mensajes y su pedido, y eso no puede

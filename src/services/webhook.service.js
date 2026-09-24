@@ -6,6 +6,7 @@ import { automationService, alAvisarAveria } from './automation.service.js';
 import { mediaService } from './media.service.js';
 import { graphApiService } from './graph-api.service.js';
 import { pool } from '../database/pool.js';
+import { detectarCampana } from './precio.service.js';
 
 /**
  * Cuando n8n no contesta, que se note en la bandeja.
@@ -185,6 +186,10 @@ export const webhookService = {
         await conversationRepository.saveAttribution(conversacion.id, event.attribution || {});
         if (event.accountId) await channelRepository.saveAccountId(channel.id, event.accountId);
 
+        // Si el anuncio es de una campaña, el precio lo tiene que estar
+        // esperando cuando escriba.
+        await detectarCampana({ conversationId: conversacion.id, adId: event.attribution?.adId || null });
+
         console.log(
           `🎯 [ATRIBUCIÓN] Conversación #${conversacion.id} volvió desde el anuncio ` +
           `${event.attribution?.adId || '(sin id)'} (${event.platform}).`
@@ -253,6 +258,24 @@ export const webhookService = {
         } catch (attrErr) {
           console.warn('⚠️ [ATRIBUCIÓN] No se pudo guardar el origen de la conversación:', attrErr.message);
         }
+      }
+
+      // B.2.b. ¿Este mensaje la mete en una campaña de precio?
+      //
+      // Va acá, antes de pasarle el chat al guion, por una razón: el guion
+      // pide el precio apenas recibe el mensaje, para armar la tarjeta del
+      // producto. Si la oferta se anotara después, quien vuelve desde el
+      // anuncio de 15 mil vería 19 mil en su primera respuesta.
+      //
+      // El anuncio de origen de la conversación no sirve para esto: se guarda
+      // solo el primero, y el remarketing es justamente alguien que vuelve por
+      // un anuncio distinto. Se mira el de ESTE mensaje.
+      if (event.eventType === 'message' && !event.isEcho) {
+        await detectarCampana({
+          conversationId: conversation.id,
+          adId: event.attribution?.adId || null,
+          texto: event.message?.text || ''
+        });
       }
 
       // B.3. Identificador de la cuenta (la de WhatsApp Business, o la página).

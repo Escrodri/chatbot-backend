@@ -7,143 +7,13 @@ import { envConfig, horaEnParaguay } from '../config/env.config.js';
 import { userRepository } from '../repositories/user.repository.js';
 import { autoReviewService } from '../services/auto-review.service.js';
 import { datosPagoService } from '../services/datos-pago.service.js';
+import { idDeMensaje, formatoGs } from '../utils/comprobante.util.js';
+import { revisionComprobanteService } from '../services/revision-comprobante.service.js';
 
-/**
- * El id de un mensaje de nuestra base, o null.
- *
- * Existe porque `Number()` convierte null, undefined y la cadena vacía en 0, y
- * `Number.isInteger(0)` es verdadero. La guarda que había —"pasalo solo si es
- * un entero"— dejaba pasar el cero, y cero no es ningún mensaje: la clave
- * foránea contra `messages` hacía fallar el UPDATE justo en el momento de
- * cobrar, con un error 23503 que nadie atrapaba.
- *
- * El guion no manda ese campo casi nunca, así que la entrega automática
- * terminaba en 500 en el caso normal. El comprobante era bueno, el dinero
- * estaba, y el cliente esperaba hasta la mañana igual.
- *
- * @param {*} valor
- * @returns {number|null}
- */
-function idDeMensaje(valor) {
-  if (valor === null || valor === undefined) return null;
-
-  const texto = String(valor).trim();
-  // Solo dígitos: el guion a veces manda el identificador de Meta ("wamid.…"),
-  // que no es un número de nuestra base.
-  if (!/^\d+$/.test(texto)) return null;
-
-  const numero = Number(texto);
-  return Number.isSafeInteger(numero) && numero > 0 ? numero : null;
-}
-
-/**
- * Una llave para el comprobante que no muestra número de operación.
- *
- * Se arma con fecha + hora + monto, todo en dígitos, porque son los tres datos
- * que cualquier pantalla de resumen muestra siempre. La misma captura reenviada
- * da exactamente la misma huella y el índice único la rechaza; dos pagos
- * distintos solo chocarían si ocurrieran en el mismo minuto por el mismo
- * importe, y ese caso cae en revisión humana.
- *
- * Se exige que estén los tres: con dos, la huella empieza a repetirse por
- * casualidad y dejaría afuera pagos buenos.
- *
- * El prefijo 9 evita que una huella pueda coincidir de casualidad con un
- * número de operación real de otro comprobante.
- *
- * @param {{fecha: *, hora: *, monto: *}} datos
- * @returns {string} Vacío si no alcanza para armarla
- */
-function construirHuella({ fecha, hora, monto }) {
-  const f = String(fecha || '').trim();
-  const h = String(hora || '').trim();
-  const m = String(monto || '').replace(/[^0-9]/g, '');
-
-  // Forma exacta o nada.
-  //
-  // Antes esto limpiaba los caracteres raros y seguía adelante con lo que
-  // quedara. Eso convertía una lectura rota en una huella con pinta de válida:
-  // el modelo devolvió una vez la hora seguida de su propio razonamiento
-  // —"0048. They included recipient name..."— y de ahí salían dígitos
-  // suficientes para armar algo.
-  //
-  // Una fecha son ocho dígitos y una hora son cuatro. Cualquier otra cosa no
-  // es un dato mal escrito: es una lectura que no se entendió, y con eso no se
-  // cobra.
-  if (!/^\d{8}$/.test(f) || !/^\d{4}$/.test(h) || !m) return '';
-
-  return `9${f}${h}${m}`;
-}
-
-/**
- * Un nombre partido en palabras comparables: sin tildes, sin puntuación y en
- * minúsculas.
- *
- * Los bancos escriben el titular de cualquier manera —"RODRIGUEZ, E.",
- * "Enmanuel R.", todo en mayúsculas, con o sin tildes—, así que comparar las
- * cadenas enteras no sirve para nada. Lo que sobrevive a todas esas formas es
- * el apellido, y para eso alcanza con ver si comparten alguna palabra larga.
- *
- * @param {string|null|undefined} valor
- * @returns {string[]}
- */
-/**
- * Cuántas horas hace que se hizo la transferencia, según la propia captura.
- *
- * La fecha viene como ddmmaaaa y la hora como hhmm, las dos en hora de
- * Paraguay, que es UTC-3 todo el año. Devuelve null cuando no se pueden leer:
- * quien llama decide, y decide no bloquear por eso, porque un comprobante sin
- * fecha legible no es un comprobante sospechoso, es uno mal leído.
- *
- * El número puede salir negativo si la captura dice una hora que todavía no
- * llegó. Un ratito de diferencia es normal —relojes, redondeos—, pero varias
- * horas adelantado no es un reloj: es una fecha que no salió de un banco.
- *
- * @param {{fecha: *, hora: *}} datos
- * @returns {number|null} Horas de antigüedad, negativas si está en el futuro
- */
-function antiguedadEnHoras({ fecha, hora }) {
-  const f = String(fecha || '').trim();
-  const h = String(hora || '').trim();
-  if (!/^\d{8}$/.test(f) || !/^\d{4}$/.test(h)) return null;
-
-  const dia = Number(f.slice(0, 2));
-  const mes = Number(f.slice(2, 4));
-  const anio = Number(f.slice(4, 8));
-  const hh = Number(h.slice(0, 2));
-  const mm = Number(h.slice(2, 4));
-
-  if (dia < 1 || dia > 31 || mes < 1 || mes > 12 || anio < 2000 || hh > 23 || mm > 59) {
-    return null;
-  }
-
-  // Una fecha imposible —31 de febrero, 30 de febrero— no la rechaza nadie:
-  // Date.UTC la corre en silencio al 3 de marzo y devuelve una fecha que no
-  // estaba en la captura. Se comprueba a mediodía, lejos de los bordes del
-  // día, que el día siga siendo el que se leyó.
-  const control = new Date(Date.UTC(anio, mes - 1, dia, 12, 0, 0));
-  if (
-    control.getUTCFullYear() !== anio ||
-    control.getUTCMonth() !== mes - 1 ||
-    control.getUTCDate() !== dia
-  ) {
-    return null;
-  }
-
-  // Paraguay es UTC-3 todo el año desde 2024: no hay horario de verano que
-  // corregir, así que la hora local más tres horas es la hora universal.
-  return (Date.now() - Date.UTC(anio, mes - 1, dia, hh + 3, mm, 0)) / 3600000;
-}
-
-function normalizarNombre(valor) {
-  return String(valor || '')
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
-}
+// Las funciones que leen un comprobante —el monto, la huella, la antigüedad,
+// el nombre— viven en utils/comprobante.util.js, y la decisión entera en
+// services/revision-comprobante.service.js. Acá solo queda lo que usan las
+// rutas del tablero.
 
 /**
  * ¿Este pedido es de quien lo está pidiendo?
@@ -280,6 +150,38 @@ export const orderController = {
         status
       });
 
+      // Lo que pasó con la plata de esta persona, en palabras, para la IA.
+      //
+      // Sin esto, cuando alguien escribía "te pasé de más" o "ya te pagué",
+      // la IA no tenía idea de que esa persona había mandado un comprobante a
+      // un supermercado, ni de cuánto faltaba, ni de qué se le había dicho.
+      // Improvisaba, y lo que improvisa una IA sin datos sobre plata es
+      // exactamente lo que no queremos que diga.
+      const pago = await revisionComprobanteService.resumenDePago(
+        pedido,
+        Number(producto?.price ?? pedido?.amount ?? 0) || 0,
+        { conversationId, productId: producto?.id ?? pedido?.product_id ?? null }
+      );
+
+      // El precio que le corresponde a ESTA persona ahora, para que el guion lo
+      // muestre en la tarjeta del producto y en los datos de pago. Sin esto,
+      // alguien que vuelve desde el anuncio de 15 mil vería 19 mil en la
+      // tarjeta: la promo del anuncio y el precio del chat no coincidirían, y
+      // ahí se cae la venta y encima parece un engaño.
+      const pp = pago.precio_persona || {};
+      const esGuaranies = !producto?.currency || producto.currency === 'PYG';
+      const precio = {
+        monto: pp.precio ?? null,
+        formateado: esGuaranies && pp.precio ? formatoGs(pp.precio) : null,
+        lista: pp.lista ?? null,
+        lista_formateado: esGuaranies && pp.lista ? formatoGs(pp.lista) : null,
+        es_promo: Boolean(pp.es_promo),
+        etiqueta: pp.etiqueta || null,
+        hasta: pp.hasta || null,
+        hasta_texto: pp.hasta_texto || ''
+      };
+      delete pago.precio_persona;
+
       return res.status(existente ? 200 : 201).json({
         order: pedido,
         product: producto
@@ -287,7 +189,9 @@ export const orderController = {
           : null,
         duplicado: Boolean(existente),
         // Lo que el flujo necesita saber de una: ¿esta persona ya pagó?
-        ya_pago: Boolean(existente && ['pagado', 'entregado'].includes(existente.status))
+        ya_pago: Boolean(existente && ['pagado', 'entregado'].includes(existente.status)),
+        pago,
+        precio
       });
     } catch (error) {
       return res.status(500).json({ error: 'Error al registrar el pedido: ' + error.message });
@@ -666,19 +570,6 @@ export const orderController = {
       const id = parseInt(req.params.id, 10);
       if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
 
-      const {
-        monto = null,
-        cuenta = null,
-        titular = null,
-        operacion = null,
-        // Fecha y hora de la operación. Con ellas se arma la huella que
-        // reemplaza al número de operación en los comprobantes que no lo
-        // muestran, que en Paraguay son la mayoría.
-        fecha = null,
-        hora = null,
-        receipt_message_id = null
-      } = req.body || {};
-
       const pedido = await orderRepository.findConEntrega(id);
       if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
 
@@ -686,428 +577,21 @@ export const orderController = {
         return res.status(404).json({ error: 'Pedido no encontrado' });
       }
 
-      // La llave que impide que la misma captura cobre dos veces.
-      //
-      // Lo ideal es el número de operación. El problema es que medio Paraguay
-      // transfiere con apps cuya pantalla de resumen no lo muestra: dice
-      // "¡Transferencia cargada con éxito!", el monto, a quién fue, la fecha y
-      // la hora, y nada más. Exigir el número ahí no protege de nada, porque
-      // esos comprobantes son perfectamente legítimos: solo manda a revisión
-      // humana a la mayoría de la gente que paga, que es justo lo contrario de
-      // para lo que existe todo esto.
-      //
-      // Cuando no hay número se arma una huella con fecha, hora y monto. Dos
-      // transferencias distintas no coinciden en los tres datos salvo que
-      // ocurran en el mismo minuto por el mismo importe, y en ese caso la
-      // segunda cae en revisión humana, que es el lado correcto del error.
-      // Reenviar la misma captura, en cambio, da siempre la misma huella y
-      // queda bloqueado por el mismo índice único de siempre.
-      const operacionLimpia = String(operacion || '').replace(/[^0-9]/g, '');
-      const huella = construirHuella({ fecha, hora, monto });
-      const claveComprobante = operacionLimpia || huella;
+      // Toda la decisión —qué cuenta, qué se repite, qué se le contesta— está
+      // en el servicio. Ver la explicación del orden de los pasos allá.
+      const resultado = await revisionComprobanteService.revisar(id, req.body || {});
+      if (!resultado) return res.status(404).json({ error: 'Pedido no encontrado' });
 
-      // Todo lo que no termina en entrega queda marcado para que alguien mire.
-      //
-      // Esto está acá, en el único lugar por donde salen TODOS los rechazos, y
-      // no repartido por cada uno. Cada motivo nuevo que se agregue de ahora en
-      // más queda cubierto solo, que es la única forma de que no se escape
-      // ninguno dentro de seis meses.
-      //
-      // La marca se pone sin esperarla. Del otro lado hay alguien mirando la
-      // pantalla del teléfono, y no tiene por qué esperar a que se escriba una
-      // etiqueta para recibir su respuesta. Si la etiqueta falla se pierde la
-      // marca; si la respuesta se demora, se pierde el cliente.
-      const rechazar = (motivo, detalle) => {
-        // El único que no se marca: el cliente reenvía la captura de algo que
-        // ya se le entregó. Eso no es un problema, es alguien contento, y
-        // llenaría el filtro de chats que no hay que revisar. Un filtro con
-        // ruido deja de mirarse a la semana.
-        if (motivo !== 'ya_estaba_pago') {
-          Promise.resolve()
-            .then(() => deliveryService.marcarParaVerificar(pedido.conversation_id, motivo, detalle))
-            .then(() => orderRepository.anotarRevision(
-              id,
-              `sin entregar (${motivo})${detalle ? ': ' + detalle : ''}`
-            ))
-            .catch(err => console.warn('⚠️ [VERIFICAR] Quedó sin marcar:', err.message));
-        }
-
-        return res.json({
-          entregado: false,
-          motivo,
-          detalle,
-          hora_paraguay: horaEnParaguay()
-        });
-      };
-
-      // El pedido ya cobrado se corta acá, antes de tocar nada.
-      //
-      // Esto estaba más abajo, después de guardar el número de operación, y esa
-      // diferencia de diez líneas era un agujero: la clienta pagaba, se le
-      // entregaba, y cualquier imagen que mandara después por el mismo chat
-      // llegaba hasta acá con un número nuevo que PISABA el de la venta real.
-      // El número original quedaba libre, y esa misma captura volvía a servir
-      // para cobrar otro pedido de madrugada. Un mensaje del cliente borraba
-      // la huella de su propia compra.
-      if (['pagado', 'entregado'].includes(pedido.status)) {
-        return rechazar('ya_estaba_pago', 'Este pedido ya figura cobrado.');
-      }
-
-      // Recién ahora se anota el número, aunque después no se entregue solo.
-      // Si no se guardara, el comprobante que revisa una persona a la mañana
-      // queda sin número registrado y esa misma captura sirve de nuevo la
-      // noche siguiente.
-      //
-      // Con su propio método y no pasando por `cambiarEstado`: esa función
-      // vuelve a sellar la fecha de cobro cada vez que el estado es 'pagado',
-      // así que anotar el número borraba quién había confirmado el pago.
-      if (claveComprobante) {
-        await orderRepository.guardarOperacion(id, claveComprobante);
-      }
-
-      // Un solo interruptor, y vive en el entorno del servidor.
-      //
-      // Acá había un segundo sistema encima: un modo guardado en la base
-      // —noche, siempre, apagado— que se cambiaba desde el tablero. Eran dos
-      // mecanismos decidiendo lo mismo, y cada uno sumaba sus propias formas
-      // de fallar: que la tabla de ajustes no se pudiera leer, que el modo
-      // quedara en 'noche' de día, que el panel no llegara al servidor. Un
-      // comprobante bueno se rechazaba y desde afuera no se podía saber cuál
-      // de los dos lo había frenado.
-      //
-      // Queda uno solo: si ENTREGA_AUTO_NOCTURNA no está en false, el sistema
-      // verifica y entrega. El horario, el modo y el tablero se vuelven a
-      // sumar cuando esto esté andando y se pueda probar de a una cosa.
-      if (!envConfig.entregaAutomatica.habilitada) {
-        return rechazar(
-          'desactivada',
-          'La entrega automática está apagada (ENTREGA_AUTO_NOCTURNA=false).'
-        );
-      }
-
-      if (!pedido.delivery_url || !pedido.delivery_url.trim()) {
-        return rechazar('sin_enlace', 'El producto no tiene enlace de entrega cargado.');
-      }
-
-      // El precio sale del producto, no de lo que mandó el guion.
-      //
-      // Con una excepción: si a esta persona ya se le ofreció el precio de
-      // recuperación, lo que tiene que haber transferido es ese, no el de
-      // lista. Sin esto, el seguimiento le ofrecía el material a Gs. 15.000,
-      // la persona transfería 15.000, y la entrega automática lo rechazaba por
-      // monto insuficiente contra los 19.000 del producto: quedaba esperando
-      // hasta la mañana justo el cliente al que le habíamos pedido que
-      // confiara en una rebaja.
-      //
-      // El nivel 1 no cambia nada porque no ofrece descuento.
-      const precioLista = Number(pedido.price ?? pedido.amount ?? 0);
-      const precioRebajado = Number(pedido.precio_recuperacion) || 0;
-      const seLeOfrecioRebaja =
-        Number(pedido.recuperacion_nivel || 0) >= 2 &&
-        precioRebajado > 0 &&
-        precioRebajado < precioLista;
-
-      const precio = seLeOfrecioRebaja ? precioRebajado : precioLista;
-      const montoLeido = Number(String(monto || '').replace(/[^0-9]/g, '')) || 0;
-
-      if (!precio || !montoLeido) {
-        return rechazar('monto_ilegible', 'No se pudo leer el monto con seguridad.');
-      }
-
-      if (montoLeido < precio) {
-        return rechazar('monto_insuficiente', `Transfirió ${montoLeido} y el material sale ${precio}.`);
-      }
-
-      if (precio > envConfig.entregaAutomatica.montoMaximo) {
-        return rechazar('monto_alto', 'Por encima del tope para aprobar sin revisión.');
-      }
-
-      // El dinero tiene que haber llegado a nosotros, y alcanza con UNA señal
-      // de las tres: el número de cuenta, el alias o documento, o el nombre.
-      //
-      // Es así y no "las tres a la vez" porque cada banco y cada billetera del
-      // Paraguay muestra cosas distintas en la captura. Uno pone la cuenta
-      // completa y ningún nombre; otro pone "Enviado a: ENMANUEL RODRIGUEZ" y
-      // nada más; el que transfiere por alias ve el alias y no la cuenta.
-      // Exigir las tres era rechazar comprobantes buenos por el formato del
-      // banco del cliente, y rechazarlos justo en la franja en la que no hay
-      // nadie para revisarlos a mano.
-      //
-      // Lo que no se hace es tomar una contradicción como fraude. Si la cuenta
-      // coincide pero el nombre no, lo más probable de lejos es que el modelo
-      // haya leído al que ENVÍA en vez de al que recibe —muchos comprobantes
-      // muestran el nombre del ordenante más grande—, y el dinero igual entró
-      // a nuestra cuenta. Se entrega.
-      //
-      // La dirección de falla es la correcta: si no coincide ninguna de las
-      // tres, no se rechaza el pago, se manda a revisión humana.
-      const cuentaLeida = String(cuenta || '').replace(/[^0-9]/g, '');
-
-      // Contra qué se compara: PRIMERO el mensaje que el bot ya le escribió a
-      // esta persona en este chat.
-      //
-      // El orden importa y antes estaba al revés. Buscar primero en el panel y
-      // en el entorno significaba depender de que alguien hubiera cargado la
-      // cuenta en un tercer lugar, además de en el guion; y como no estaba
-      // cargada, se rechazaban pagos reales con "falta configurar la cuenta".
-      //
-      // El mensaje del chat, en cambio, existe SIEMPRE: el bot no puede haber
-      // recibido un comprobante sin haber mandado antes los datos para pagar.
-      // Y es el dato correcto, porque la pregunta que hay que contestar es
-      // exactamente "¿transfirió a donde le dijimos que transfiera?".
-      //
-      // Nada de esto viene del guion: se lee de nuestra base, de un mensaje
-      // que salió de nuestro servidor.
-      let nuestros = await datosPagoService.leerDelChat(pedido.conversation_id);
-      if (!nuestros) nuestros = await datosPagoService.leer();
-
-      const propios = datosPagoService.identificadores(nuestros);
-      const titularPropio = normalizarNombre(nuestros.titular);
-      const titularLeido = normalizarNombre(titular);
-
-      if (!propios.length && !titularPropio.length) {
-        console.warn(
-          `🚨 [ENTREGA AUTO] Pedido #${id}: no se pudo determinar la cuenta propia. ` +
-          'No está en el chat, ni en el panel, ni en el entorno.'
-        );
-        return rechazar(
-          'sin_cuenta_configurada',
-          'No se pudo determinar a qué cuenta le dijimos que transfiera.'
-        );
-      }
-
-      // Cuenta, alias o documento. Se compara por terminación y no la cadena
-      // entera porque cada banco recorta el número distinto; y cuantos más
-      // dígitos haya de los dos lados, más se comparan. Cuatro es el piso que
-      // impone el banco que menos muestra, no el criterio que querríamos: con
-      // menos, cualquier cuenta ajena que termine en esa cifra pasaría.
-      const coincideCuenta = cuentaLeida.length >= 4 && propios.some(propio => {
-        const largo = Math.min(propio.length, cuentaLeida.length, 6);
-        return propio.slice(-largo) === cuentaLeida.slice(-largo);
-      });
-
-      // El nombre. Tienen que coincidir DOS palabras, no una.
-      //
-      // Antes alcanzaba con una palabra larga, y en la práctica esa palabra era
-      // el apellido. En Paraguay eso no identifica a nadie: cualquier captura
-      // de una transferencia a cualquier González, cualquier Rodríguez o
-      // cualquier Benítez del país pasaba el control de destino y cobraba. No
-      // hacía falta ni falsificar nada, bastaba con una captura ajena de verdad.
-      //
-      // Con dos palabras hay que compartir nombre Y apellido, que ya es una
-      // persona y no un padrón entero. Se comparan de a palabras, y no la
-      // cadena entera, porque los bancos las ordenan y recortan a su gusto:
-      // "RODRIGUEZ, ENMANUEL", "Enmanuel Rodriguez", en mayúsculas, con o sin
-      // tildes; todas esas formas comparten las mismas dos palabras.
-      //
-      // Lo que se pierde es el comprobante que muestra "E. RODRIGUEZ" y ninguna
-      // cuenta. Ese no se rechaza: lo mira una persona. Perder la inmediatez en
-      // un caso raro pesa mucho menos que regalar el material a cualquiera que
-      // comparta apellido.
-      const coincideTitular = (() => {
-        if (!titularPropio.length || !titularLeido.length) return false;
-
-        const propias = new Set(titularPropio.filter(p => p.length >= 3));
-        const compartidas = new Set(
-          titularLeido.filter(p => p.length >= 3 && propias.has(p))
-        );
-
-        // Si nuestro propio titular es una sola palabra —un nombre de fantasía,
-        // un comercio—, no se le puede exigir dos. Ahí esa única palabra tiene
-        // que estar, y alcanza.
-        const exigidas = propias.size >= 2 ? 2 : 1;
-        return compartidas.size >= exigidas;
-      })();
-
-      if (!coincideCuenta && !coincideTitular) {
-        const leido = [
-          cuentaLeida ? `cuenta ${cuentaLeida}` : null,
-          String(titular || '').trim() ? `a nombre de "${String(titular).trim()}"` : null
-        ].filter(Boolean).join(', ');
-
-        return rechazar(
-          'destino_no_reconocido',
-          leido
-            ? `El comprobante figura ${leido}, y eso no coincide con ninguno de nuestros datos.`
-            : 'No se pudo leer ni la cuenta ni el titular de destino.'
-        );
-      }
-
-      // Sin número de operación Y sin fecha/hora/monto no hay forma de saber
-      // si esta captura ya se usó antes, y sin eso la misma imagen cobra todas
-      // las veces que la manden.
-      if (!claveComprobante) {
-        return rechazar(
-          'sin_identificador',
-          'El comprobante no muestra número de operación ni fecha y hora legibles.'
-        );
-      }
-
-      // Que la transferencia sea de recién.
-      //
-      // Los controles de arriba comprueban que el comprobante sea coherente, y
-      // una captura vieja y auténtica es perfectamente coherente: el monto
-      // alcanza, el destino somos nosotros, y ese número no se usó nunca
-      // porque nunca se usó para comprar nada. Cualquiera que alguna vez le
-      // haya transferido plata a este negocio se queda con una imagen que
-      // cobra, y cobra cada vez que abra una conversación nueva.
-      //
-      // La fecha corta eso: el comprobante tiene que ser de una transferencia
-      // que acaba de pasar, que es lo que se está afirmando al mandarlo.
-      //
-      // Si la fecha no se pudo leer no se bloquea: eso es una lectura mala, no
-      // un fraude, y el número de operación sigue impidiendo que la misma
-      // captura cobre dos veces.
-      const horasMax = Number(envConfig.entregaAutomatica.horasMaximasComprobante) || 0;
-      const antiguedad = antiguedadEnHoras({ fecha, hora });
-
-      if (horasMax > 0 && antiguedad !== null) {
-        if (antiguedad > horasMax) {
-          const dias = Math.floor(antiguedad / 24);
-          console.warn(
-            `🚨 [ENTREGA AUTO] Pedido #${id}: comprobante de hace ${Math.round(antiguedad)}h ` +
-            `(${fecha} ${hora}). El tope son ${horasMax}h. Se manda a revisión humana.`
-          );
-          return rechazar(
-            'comprobante_viejo',
-            dias >= 1
-              ? `El comprobante es del ${fecha.slice(0, 2)}/${fecha.slice(2, 4)}, hace ${dias} día(s).`
-              : `El comprobante tiene ${Math.round(antiguedad)} horas.`
-          );
-        }
-
-        // Adelantado en el tiempo. Un par de horas puede ser un reloj o un
-        // redondeo; medio día no es ninguna de las dos cosas.
-        if (antiguedad < -12) {
-          console.warn(
-            `🚨 [ENTREGA AUTO] Pedido #${id}: comprobante con fecha futura ` +
-            `(${fecha} ${hora}). Se manda a revisión humana.`
-          );
-          return rechazar(
-            'fecha_futura',
-            'El comprobante figura con una fecha que todavía no llegó.'
-          );
-        }
-      }
-
-      // El tope del día. Ver la nota en la configuración: ningún control
-      // individual puede ver que TODOS los comprobantes estén pasando.
-      const tope = envConfig.entregaAutomatica.maxPorDia;
-      if (tope > 0) {
-        const hechas = await orderRepository.autoAprobadosDelDia();
-        if (hechas >= tope) {
-          console.warn(
-            `🚨 [ENTREGA AUTO] Se alcanzó el tope de ${tope} entregas automáticas en el día. ` +
-            'El resto pasa a revisión humana hasta mañana.'
-          );
-          return rechazar(
-            'tope_diario',
-            `Ya se entregaron ${hechas} pedidos solos hoy. El resto los revisa una persona.`
-          );
-        }
-      }
-
-      const repetida = await orderRepository.operacionYaUsada(claveComprobante, id);
-      if (repetida) {
-        console.warn(
-          `🚨 [ENTREGA AUTO] Pedido #${id}: el comprobante ${claveComprobante} ya cobró el pedido #${repetida.id}. ` +
-          'Se manda a revisión humana.'
-        );
-        return rechazar('operacion_repetida', `Ese comprobante ya se usó en el pedido #${repetida.id}.`);
-      }
-
-      // Pasó todo. Se cobra y se entrega, marcado como aprobado por el sistema
-      // para que a la mañana se pueda repasar contra el extracto.
-      let pagado;
-      try {
-        pagado = await orderRepository.cambiarEstado(id, 'pagado', {
-          confirmedBy: null,
-          autoAprobado: true,
-          receiptOperacion: claveComprobante,
-          // La misma guarda contra la carrera que usa la confirmación manual:
-          // dos comprobantes del mismo chat llegando juntos de madrugada
-          // entregaban dos veces.
-          siEstadoEs: pedido.status,
-          // Solo si es un id de mensaje de nuestra base. Ver `idDeMensaje`:
-          // acá había un cero disfrazado de entero válido que hacía fallar el
-          // UPDATE justo en el momento de cobrar.
-          receiptMessageId: idDeMensaje(receipt_message_id),
-          note:
-            `Aprobado automáticamente a las ${horaEnParaguay()}h ` +
-            `(verificación automática): ` +
-            `monto ${montoLeido}, ${operacionLimpia ? 'operación ' + operacionLimpia : 'huella ' + huella}, ` +
-            `verificado por ${[coincideCuenta ? 'cuenta/alias' : null, coincideTitular ? 'titular' : null].filter(Boolean).join(' y ')}.`
-        });
-      } catch (err) {
-        // Última red: si entre el chequeo de arriba y este momento otro pedido
-        // se quedó con el mismo número, la base lo rechaza y esto queda para
-        // una persona. Que se escape a revisión humana es el resultado
-        // correcto; cobrar dos veces con el mismo comprobante no.
-        if (err.code === 'ERR_OPERACION_REPETIDA') {
-          return rechazar('operacion_repetida', 'Ese comprobante ya se usó para cobrar otro pedido.');
-        }
-        throw err;
-      }
-
-      // Sin fila actualizada, otro comprobante del mismo chat llegó primero y
-      // ya cobró este pedido. No se entrega de nuevo.
-      if (!pagado) {
-        return rechazar('ya_estaba_pago', 'Otro comprobante del mismo chat ya cobró este pedido.');
-      }
-
-      const entrega = await deliveryService.entregar(pedido, null);
-
-      let estadoFinal = pagado;
-      if (entrega.enviado) {
-        const entregado = await orderRepository.cambiarEstado(id, 'entregado', { autoAprobado: true });
-        if (entregado) estadoFinal = entregado;
-        await deliveryService.marcarClienteQueCompro(pedido.conversation_id);
-      } else {
-        // Este es el peor caso de todos y el que menos se nota: el comprobante
-        // pasó todos los controles, el pedido quedó COBRADO, y el mensaje con
-        // el enlace no salió. Del otro lado hay alguien que pagó, a quien el
-        // sistema ya le dio por bueno el pago, y que no recibió nada.
-        //
-        // No entra por `rechazar` —acá no se rechazó nada— así que la marca
-        // hay que ponerla a mano. Es la que más urge de todas.
-        await deliveryService.marcarParaVerificar(
-          pedido.conversation_id,
-          'cobrado_sin_entregar',
-          entrega.detalle || entrega.motivo || 'El enlace no se pudo enviar.'
-        );
-      }
-
-      const conv = await conversationRepository.findById(pedido.conversation_id);
-      if (conv) {
-        socketManager.emitConversationUpdated(conv.channel_id, {
-          id: conv.id,
-          order_status: estadoFinal.status
-        });
-      }
-
-      console.log(
-        `🌙 [ENTREGA AUTO] Pedido #${id} cobrado y entregado sin revisión humana ` +
-        `(${horaEnParaguay()}h, ` +
-        `${operacionLimpia ? 'operación ' + operacionLimpia : 'huella ' + huella}).`
-      );
-
-      return res.json({
-        entregado: Boolean(entrega.enviado),
-        motivo: entrega.enviado ? null : entrega.motivo,
-        detalle: entrega.detalle || null,
-        estado: estadoFinal.status,
-        hora_paraguay: horaEnParaguay(),
-        verificado_por: [coincideCuenta ? 'cuenta' : null, coincideTitular ? 'titular' : null]
-          .filter(Boolean).join('+') || null
-      });
+      return res.json({ ...resultado, hora_paraguay: horaEnParaguay() });
     } catch (error) {
       // Ante cualquier problema, el comprobante queda para una persona. Nunca
       // al revés.
       //
       // Y queda marcado, que es distinto de "queda para una persona": sin la
       // etiqueta, un error acá se ve desde el tablero exactamente igual que un
-      // chat donde nunca pasó nada. La falla que más cuesta encontrar es la
-      // que no deja rastro en ningún lado salvo el registro del servidor.
+      // chat donde nunca pasó nada.
+      console.error('❌ [COMPROBANTE] La revisión falló:', error.message);
+
       const conversacion = parseInt(req.body?.conversation_id, 10);
       if (Number.isInteger(conversacion) && conversacion > 0) {
         await deliveryService
@@ -1115,7 +599,13 @@ export const orderController = {
           .catch(() => {});
       }
 
-      return res.status(500).json({ entregado: false, motivo: 'error', error: error.message });
+      return res.status(500).json({
+        entregado: false,
+        motivo: 'error',
+        error: error.message,
+        // Que el cliente no quede sin respuesta porque el servidor falló.
+        respuesta: 'Recibí tu comprobante ✅ Lo reviso y te confirmo por acá.'
+      });
     }
   }
 };

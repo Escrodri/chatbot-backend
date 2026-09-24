@@ -10,6 +10,7 @@ import {
   enHorarioDeSilencio,
   proximoHorarioParaEscribir
 } from '../config/env.config.js';
+import { precioParaPersona, registrarOfertaRecuperacion } from './precio.service.js';
 
 /**
  * Recuperación de abandonos: volver a escribirle al que se quedó a mitad.
@@ -141,12 +142,8 @@ export const recoveryService = {
     const producto = candidato.product_name || 'el material';
     const moneda = candidato.product_currency || candidato.currency || 'PYG';
 
-    const normal = Number(candidato.product_price || candidato.amount) || 0;
-    const rebajado = Number(candidato.precio_recuperacion) || 0;
-    // Solo es un descuento si es más barato. Un precio de recuperación cargado
-    // más alto que el precio real sería un error de tipeo, y anunciarlo como
-    // oferta es la clase de cosa que se descubre en la reseña.
-    const hayDescuento = rebajado > 0 && normal > 0 && rebajado < normal;
+    const rebajado = this.descuentoPara(candidato);
+    const hayDescuento = rebajado > 0;
 
     const cual = segmento(candidato.etapa);
 
@@ -197,6 +194,28 @@ export const recoveryService = {
       '',
       'Y si no era para vos, todo bien igual. Acá quedo si algún día lo necesitás.'
     ].join('\n');
+  },
+
+  /**
+   * El precio de recuperación que se le puede ofrecer, o 0 si no hay.
+   *
+   * Se compara contra el precio que esta persona YA tiene, no contra el de
+   * lista. Si entró por el anuncio de remarketing a 15.000 y el seguimiento
+   * le ofreciera "te lo dejo en 15.000", le estaría vendiendo como descuento
+   * lo que ya tenía, y si la campaña es de 12.000, le estaría subiendo el
+   * precio con cara de rebaja.
+   *
+   * Solo es un descuento si es más barato. Un precio de recuperación cargado
+   * más alto que el real sería un error de tipeo, y anunciarlo como oferta es
+   * la clase de cosa que se descubre en la reseña.
+   *
+   * @param {object} candidato Con `precio_vigente` si ya se calculó
+   * @returns {number}
+   */
+  descuentoPara(candidato) {
+    const vigente = Number(candidato.precio_vigente || candidato.product_price || candidato.amount) || 0;
+    const rebajado = Number(candidato.precio_recuperacion) || 0;
+    return rebajado > 0 && vigente > 0 && rebajado < vigente ? rebajado : 0;
   },
 
   /**
@@ -407,6 +426,19 @@ export const recoveryService = {
           continue;
         }
 
+        // Qué precio tiene hoy esta persona, por si entró a una campaña.
+        try {
+          const pp = await precioParaPersona({
+            conversationId: candidato.conversation_id,
+            productId: candidato.product_id,
+            precioLista: Number(candidato.product_price || candidato.amount) || 0,
+            momentos: [Date.now()]
+          });
+          candidato.precio_vigente = pp.precio;
+        } catch {
+          // Sin el precio vigente se compara contra el de lista, como antes.
+        }
+
         const texto = this.armarMensaje(candidato, nivel);
 
         // Se anota ANTES de mandar, no después. Si Meta acepta el mensaje y
@@ -420,6 +452,20 @@ export const recoveryService = {
 
         if (enviado) {
           balance.enviados++;
+
+          // El descuento existe recién ahora que el mensaje salió, y vence.
+          // Antes dependía del escalón, que sube aunque el mensaje no se mande:
+          // se le terminaba cobrando 15.000 a gente a la que nunca se le
+          // ofreció nada.
+          const rebajado = nivel >= 2 ? this.descuentoPara(candidato) : 0;
+          if (rebajado > 0) {
+            await registrarOfertaRecuperacion({
+              conversationId: candidato.conversation_id,
+              productId: candidato.product_id,
+              precio: rebajado,
+              nivel
+            });
+          }
         } else {
           balance.fallidos++;
           console.warn(`⚠️ [RECUPERACION] Pedido #${candidato.id} nivel ${nivel}: ${detalle}`);

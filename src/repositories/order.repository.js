@@ -474,6 +474,30 @@ export const orderRepository = {
   },
 
   /**
+   * A qué precio se cobró este pedido y por qué.
+   *
+   * Con un solo precio no hacía falta anotarlo. Con campañas sí: sin esto no
+   * hay forma de saber después cuánto vendió el remarketing de 15 mil contra
+   * el precio de siempre, ni de explicarle a un cliente por qué pagó lo que
+   * pagó.
+   *
+   * @param {number} id
+   * @param {{precio:number, origen:string, campanaId:number|null}} datos
+   */
+  async anotarPrecioCobrado(id, { precio, origen, campanaId = null }) {
+    const { rows } = await query(
+      `UPDATE orders
+          SET precio_cobrado = $2,
+              precio_origen = $3,
+              campana_id = $4
+        WHERE id = $1
+        RETURNING id, precio_cobrado, precio_origen, campana_id`,
+      [id, precio, origen ? String(origen).slice(0, 160) : null, campanaId]
+    );
+    return rows[0] || null;
+  },
+
+  /**
    * Cuántas entregas hizo el sistema solo en lo que va del día paraguayo.
    *
    * El día se corta en Asunción y no en UTC porque es el día del negocio: un

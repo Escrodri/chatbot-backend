@@ -13,6 +13,7 @@ import { contactRouter } from './contact.routes.js';
 import { tagRouter } from './tag.routes.js';
 import { mediaRouter } from './media.routes.js';
 import { automationRouter } from './automation.routes.js';
+import { campanaRouter } from './campana.routes.js';
 import { config } from '../config/index.js';
 
 export const apiRouter = Router();
@@ -34,6 +35,9 @@ apiRouter.use('/products', productRouter);
 
 // Pedidos: estado de cada venta (interesado, comprobante, pagado, entregado)
 apiRouter.use('/orders', orderRouter);
+
+// Campañas de precio: remarketing y promos con fecha
+apiRouter.use('/campanas', campanaRouter);
 
 // Métricas de ventas, leads y rendimiento de productos y asesores
 apiRouter.use('/analytics', analyticsRouter);

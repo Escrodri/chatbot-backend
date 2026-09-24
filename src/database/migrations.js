@@ -242,7 +242,134 @@ export async function initDatabase() {
          valor      JSONB NOT NULL,
          updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
          updated_by INTEGER
-       )`
+       )`,
+
+      // Cada comprobante que llega, con lo que se leyó y lo que se decidió.
+      //
+      // El pedido guardaba un solo número de operación, y con eso no se podía
+      // saber si alguien pagó en dos partes, si pagó dos veces, ni si ya había
+      // mandado esa misma captura. Ver `comprobante.repository.js`.
+      //
+      // `message_id` va sin clave foránea a propósito: el guion a veces manda
+      // ids que no son de nuestra base, y una foránea ahí convierte un dato
+      // decorativo en un error 500 justo en el momento de cobrar. Ya pasó.
+      `CREATE TABLE IF NOT EXISTS comprobantes (
+         id              SERIAL PRIMARY KEY,
+         order_id        INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+         conversation_id INTEGER,
+         message_id      INTEGER,
+         clave           VARCHAR(80),
+         monto           NUMERIC(14, 2),
+         moneda          VARCHAR(10),
+         cuenta          VARCHAR(40),
+         titular         VARCHAR(120),
+         fecha           VARCHAR(8),
+         hora            VARCHAR(4),
+         tipo            VARCHAR(20),
+         veredicto       VARCHAR(40) NOT NULL,
+         recibido        BOOLEAN NOT NULL DEFAULT FALSE,
+         created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+       )`,
+      'CREATE INDEX IF NOT EXISTS idx_comprobantes_pedido ON comprobantes (order_id, created_at)',
+      'CREATE INDEX IF NOT EXISTS idx_comprobantes_clave ON comprobantes (clave) WHERE clave IS NOT NULL',
+
+      // Una transferencia cuenta para UN pedido, nunca para dos. En la base y
+      // no en el código, por la misma razón que el índice de operación de
+      // arriba: dos comprobantes iguales en el mismo segundo pasan los dos
+      // cualquier chequeo de "¿ya se usó?" que se haga leyendo antes de
+      // escribir.
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_comprobantes_clave_recibida
+         ON comprobantes (clave)
+         WHERE recibido = TRUE AND clave IS NOT NULL`,
+
+      // Campañas de precio: remarketing, promos por fecha.
+      //
+      // Hasta ahora había un solo precio especial, el de recuperación, y
+      // salía de un número —el escalón del seguimiento— que no vencía nunca
+      // y que además subía aunque el mensaje con el descuento no hubiera
+      // salido. Una campaña dice explícitamente cuánto, para qué producto,
+      // desde cuándo, hasta cuándo, y a quién: solo a los que llegan por el
+      // anuncio o escriben la palabra clave, o a todos los que escriban
+      // mientras dure.
+      `CREATE TABLE IF NOT EXISTS campanas (
+         id            SERIAL PRIMARY KEY,
+         nombre        VARCHAR(80) NOT NULL,
+         product_id    INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+         precio        NUMERIC(14, 2) NOT NULL,
+         desde         TIMESTAMPTZ NOT NULL,
+         hasta         TIMESTAMPTZ NOT NULL,
+         alcance       VARCHAR(20) NOT NULL DEFAULT 'invitados',
+         anuncios      TEXT,
+         palabra_clave VARCHAR(60),
+         gracia_horas  INTEGER NOT NULL DEFAULT 24,
+         activa        BOOLEAN NOT NULL DEFAULT TRUE,
+         created_by    INTEGER,
+         created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         updated_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+       )`,
+      'CREATE INDEX IF NOT EXISTS idx_campanas_producto ON campanas (product_id, activa, desde, hasta)',
+
+      // Qué precio especial se le ofreció a cada persona, de dónde salió y
+      // hasta cuándo vale.
+      //
+      // Va por conversación y no por pedido porque el remarketing apunta a
+      // personas: alguien que vuelve desde el anuncio de 15 mil puede no
+      // tener todavía un pedido abierto, y el precio tiene que estar
+      // esperándolo cuando lo abra.
+      `CREATE TABLE IF NOT EXISTS ofertas (
+         id              SERIAL PRIMARY KEY,
+         conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+         product_id      INTEGER REFERENCES products(id) ON DELETE CASCADE,
+         precio          NUMERIC(14, 2) NOT NULL,
+         origen          VARCHAR(20) NOT NULL,
+         campana_id      INTEGER REFERENCES campanas(id) ON DELETE CASCADE,
+         detalle         VARCHAR(200),
+         desde           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         hasta           TIMESTAMPTZ,
+         created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+       )`,
+      'CREATE INDEX IF NOT EXISTS idx_ofertas_conversacion ON ofertas (conversation_id, desde)',
+
+      // Una persona entra a una campaña una sola vez, aunque vuelva a tocar
+      // el anuncio diez veces. Si no, la fecha de la oferta se correría con
+      // cada clic y no se sabría cuándo la recibió de verdad.
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_ofertas_una_por_campana
+         ON ofertas (conversation_id, campana_id)
+         WHERE campana_id IS NOT NULL`,
+
+      // Cada comprobante anota contra qué precio se lo midió y por qué. Sin
+      // esto, un "faltan 4.000" no se puede explicar después: ¿era lista,
+      // era promo vencida, era alguien que pagó el precio de un anuncio que
+      // nunca vio?
+      'ALTER TABLE comprobantes ADD COLUMN IF NOT EXISTS precio_aplicado NUMERIC(14, 2)',
+      'ALTER TABLE comprobantes ADD COLUMN IF NOT EXISTS precio_origen VARCHAR(160)',
+      'ALTER TABLE comprobantes ADD COLUMN IF NOT EXISTS oferta_id INTEGER',
+
+      // Y el pedido cobrado, a qué precio y por qué campaña. Es lo que
+      // permite contar cuánto vendió cada campaña.
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS precio_cobrado NUMERIC(14, 2)',
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS precio_origen VARCHAR(160)',
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS campana_id INTEGER',
+
+      // Los que ya recibieron el descuento de recuperación antes de que
+      // existiera esta tabla. Sin esto, a quien se le prometió 15.000 ayer se
+      // le pediría 19.000 hoy. Se les da el plazo normal desde el último
+      // seguimiento, y corre una sola vez: si ya tiene una oferta de
+      // recuperación, no se toca.
+      `INSERT INTO ofertas (conversation_id, product_id, precio, origen, detalle, desde, hasta)
+       SELECT o.conversation_id, o.product_id, p.precio_recuperacion, 'recuperacion',
+              'seguimiento nivel ' || o.recuperacion_nivel || ' (anterior a las ofertas)',
+              o.recuperacion_at, o.recuperacion_at + INTERVAL '72 hours'
+         FROM orders o
+         JOIN products p ON p.id = o.product_id
+        WHERE COALESCE(o.recuperacion_nivel, 0) >= 2
+          AND o.recuperacion_at IS NOT NULL
+          AND p.precio_recuperacion > 0
+          AND p.precio_recuperacion < p.price
+          AND NOT EXISTS (
+            SELECT 1 FROM ofertas f
+             WHERE f.conversation_id = o.conversation_id AND f.origen = 'recuperacion'
+          )`
     ];
 
     for (const sql of columnMigrations) {
