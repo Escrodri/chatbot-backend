@@ -404,7 +404,14 @@ export async function initDatabase() {
       // De qué producto se está hablando en cada conversación. Con varios
       // productos, un "bueno" o la foto del comprobante no dicen de cuál se
       // trata: se toma este, que cambia solo cuando la persona elige otro.
-      'ALTER TABLE conversations ADD COLUMN IF NOT EXISTS producto_foco_id INTEGER'
+      'ALTER TABLE conversations ADD COLUMN IF NOT EXISTS producto_foco_id INTEGER',
+
+      // Identificador del conjunto de anuncios (adset) y de campaña.
+      // Permite saber con precisión de qué conjunto vino la conversación además del anuncio.
+      'ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_adset_id VARCHAR(100)',
+      'CREATE INDEX IF NOT EXISTS idx_conversations_adset ON conversations (source_adset_id) WHERE source_adset_id IS NOT NULL',
+      'ALTER TABLE anuncios ADD COLUMN IF NOT EXISTS adset_id VARCHAR(100)',
+      'ALTER TABLE anuncios ADD COLUMN IF NOT EXISTS campaign_id VARCHAR(100)'
     ];
 
     for (const sql of columnMigrations) {

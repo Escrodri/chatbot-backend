@@ -8,6 +8,26 @@ import { graphApiService } from './graph-api.service.js';
 import { pool } from '../database/pool.js';
 import { detectarCampana } from './precio.service.js';
 import { anuncioRepository } from '../repositories/anuncio.repository.js';
+import { metaAdsService } from './meta-ads.service.js';
+
+async function enriquecerOrigenAnuncio(conversationId, attribution, channelToken) {
+  if (!attribution?.adId) return;
+  try {
+    const info = await metaAdsService.consultarAnuncioMeta(attribution.adId, channelToken);
+    if (info) {
+      if (info.adsetId) {
+        await conversationRepository.saveAttribution(conversationId, { adsetId: info.adsetId });
+      }
+      console.log(
+        `🎯 [ATRIBUCIÓN] Conversación #${conversationId} identificada: ` +
+        `Anuncio "${info.nombre || attribution.adId}" · ` +
+        `Conjunto: "${info.conjunto || info.adsetId || '(sin conjunto)'}".`
+      );
+    }
+  } catch (err) {
+    console.warn(`⚠️ [ATRIBUCIÓN] Error al enriquecer datos de anuncio #${attribution.adId}:`, err.message);
+  }
+}
 
 /**
  * Cuando n8n no contesta, que se note en la bandeja.
@@ -183,10 +203,13 @@ export const webhookService = {
           name: event.sender.name,
           nameIsPlaceholder: true
         });
-        const conversacion = await conversationRepository.findOrCreateByContact(channel.id, contacto.id);
         await conversationRepository.saveAttribution(conversacion.id, event.attribution || {});
         await anuncioRepository.visto(event.attribution, event.platform);
         if (event.accountId) await channelRepository.saveAccountId(channel.id, event.accountId);
+        if (event.attribution?.adId) {
+          enriquecerOrigenAnuncio(conversacion.id, event.attribution, channel.accessToken || channel.access_token)
+            .catch(() => {});
+        }
 
         // Si el anuncio es de una campaña, el precio lo tiene que estar
         // esperando cuando escriba.
@@ -194,7 +217,8 @@ export const webhookService = {
 
         console.log(
           `🎯 [ATRIBUCIÓN] Conversación #${conversacion.id} volvió desde el anuncio ` +
-          `${event.attribution?.adId || '(sin id)'} (${event.platform}).`
+          `${event.attribution?.adId || '(sin id)'} (${event.platform})` +
+          `${event.attribution?.adsetId ? ` | Conjunto ID: ${event.attribution.adsetId}` : ''}.`
         );
       } catch (refErr) {
         console.warn('⚠️ [ATRIBUCIÓN] No se pudo guardar el referido:', refErr.message);
@@ -252,10 +276,15 @@ export const webhookService = {
         try {
           await conversationRepository.saveAttribution(conversation.id, event.attribution);
           await anuncioRepository.visto(event.attribution, event.platform);
+          if (event.attribution.adId) {
+            enriquecerOrigenAnuncio(conversation.id, event.attribution, channelToken)
+              .catch(() => {});
+          }
           if (event.attribution.ctwaClid || event.attribution.adId) {
             console.log(
               `🎯 [ATRIBUCIÓN] Conversación #${conversation.id} viene del anuncio ` +
-              `${event.attribution.adId || '(sin id)'} (${event.platform}).`
+              `${event.attribution.adId || '(sin id)'} (${event.platform})` +
+              `${event.attribution.adsetId ? ` | Conjunto ID: ${event.attribution.adsetId}` : ''}.`
             );
           }
         } catch (attrErr) {

@@ -153,6 +153,7 @@ export const normalizerService = {
                 attribution: ref ? {
                   ctwaClid: ref.ctwa_clid || null,
                   adId: ref.source_id || null,
+                  adsetId: ref.adset_id || null,
                   sourceType: ref.source_type || null,
                   sourceUrl: ref.source_url || null,
                   // Lo que la persona vio en el anuncio. Sirve para reconocerlo
@@ -262,6 +263,7 @@ export const normalizerService = {
               attribution: ref ? {
                 ctwaClid: ref.ctwa_clid || null,
                 adId: ref.ad_id || null,
+                adsetId: ref.adset_id || ref.ads_context_data?.adset_id || null,
                 sourceType: ref.source || ref.type || null,
                 sourceUrl: ref.ref || null,
                 titulo: ref.ads_context_data?.ad_title || null,
@@ -305,6 +307,7 @@ export const normalizerService = {
                 attribution: {
                   ctwaClid: item.referral.ctwa_clid || null,
                   adId: item.referral.ad_id || null,
+                  adsetId: item.referral.adset_id || item.referral.ads_context_data?.adset_id || null,
                   sourceType: item.referral.source || item.referral.type || null,
                   sourceUrl: item.referral.ref || null,
                   titulo: item.referral.ads_context_data?.ad_title || null,

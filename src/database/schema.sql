@@ -154,6 +154,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_media ON messages(meta_media_id) WHERE m
 -- ==============================================================================
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS ctwa_clid VARCHAR(512);
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_ad_id VARCHAR(100);
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_adset_id VARCHAR(100);
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_type VARCHAR(50);
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_url TEXT;
 

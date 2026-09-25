@@ -55,8 +55,8 @@ export const conversationRepository = {
       `SELECT 
          c.id, c.channel_id, c.contact_id, c.last_message_text, c.last_message_time,
          c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id, c.created_at,
-         c.ctwa_clid, c.source_ad_id, c.source_type, c.source_url,
-         an.nombre as anuncio_nombre, an.conjunto as anuncio_conjunto, an.titulo as anuncio_titulo,
+         c.ctwa_clid, c.source_ad_id, c.source_adset_id, c.source_type, c.source_url,
+         an.nombre as anuncio_nombre, an.conjunto as anuncio_conjunto, an.adset_id as anuncio_adset_id, an.campana as anuncio_campana, an.titulo as anuncio_titulo,
          ct.name as contact_name, ct.phone_or_username as contact_phone, ct.avatar_url as contact_avatar, ct.platform_user_id,
          COALESCE(ch.platform, ct.platform) as platform, 
          COALESCE(ch.name, 'Canal Desconectado') as channel_name, 
@@ -86,17 +86,18 @@ export const conversationRepository = {
    * @param {{ ctwaClid?: string|null, adId?: string|null, sourceType?: string|null, sourceUrl?: string|null }} datos
    * @returns {Promise<void>}
    */
-  async saveAttribution(conversationId, { ctwaClid = null, adId = null, sourceType = null, sourceUrl = null } = {}) {
-    if (!ctwaClid && !adId) return;
+  async saveAttribution(conversationId, { ctwaClid = null, adId = null, adsetId = null, sourceType = null, sourceUrl = null } = {}) {
+    if (!ctwaClid && !adId && !adsetId) return;
 
     await query(
       `UPDATE conversations
        SET ctwa_clid = COALESCE(ctwa_clid, $1),
            source_ad_id = COALESCE(source_ad_id, $2),
-           source_type = COALESCE(source_type, $3),
-           source_url = COALESCE(source_url, $4)
-       WHERE id = $5`,
-      [ctwaClid, adId, sourceType, sourceUrl, conversationId]
+           source_adset_id = COALESCE(source_adset_id, $3),
+           source_type = COALESCE(source_type, $4),
+           source_url = COALESCE(source_url, $5)
+       WHERE id = $6`,
+      [ctwaClid, adId, adsetId, sourceType, sourceUrl, conversationId]
     );
   },
 
@@ -287,10 +288,10 @@ export const conversationRepository = {
       SELECT 
         c.id, c.channel_id, c.contact_id, c.last_message_text, c.last_message_time,
         c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id,
-        c.source_ad_id,
-        -- De qué anuncio vino, con el nombre que tiene en el Administrador
+        c.source_ad_id, c.source_adset_id,
+        -- De qué anuncio y conjunto vino, con el nombre que tiene en el Administrador
         -- de anuncios. La bandeja lo muestra en cada chat.
-        an.nombre as anuncio_nombre, an.conjunto as anuncio_conjunto, an.titulo as anuncio_titulo,
+        an.nombre as anuncio_nombre, an.conjunto as anuncio_conjunto, an.adset_id as anuncio_adset_id, an.campana as anuncio_campana, an.titulo as anuncio_titulo,
         -- Si esta persona se enojó o nos trató de estafadores. La bandeja lo
         -- marca para que se lo mire antes que a ningún otro chat.
         c.molesto_at,

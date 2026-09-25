@@ -104,14 +104,16 @@ export async function sincronizarNombres() {
     let n = 0;
     for (const cuenta of ajustes().cuentas) {
       const ads = await todas(`${cuenta}/ads`, {
-        fields: 'id,name,effective_status,adset{name},campaign{name}',
+        fields: 'id,name,effective_status,adset{id,name},campaign{id,name}',
         limit: '500'
       });
       for (const a of ads) {
         await anuncioRepository.nombrar(a.id, {
           nombre: a.name || null,
           conjunto: a.adset?.name || null,
-          campana: a.campaign?.name || null
+          adsetId: a.adset?.id || null,
+          campana: a.campaign?.name || null,
+          campaignId: a.campaign?.id || null
         });
         n++;
       }
@@ -155,7 +157,7 @@ export async function gastoPorAnuncio({ desde, hasta, todo = false }) {
     for (const cuenta of ajustes().cuentas) {
       const filas = await todas(`${cuenta}/insights`, {
         level: 'ad',
-        fields: 'ad_id,ad_name,adset_name,campaign_name,spend,impressions,actions',
+        fields: 'ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,actions',
         ...(todo ? { date_preset: 'maximum' } : { time_range: { since, until } }),
         limit: '500'
       });
@@ -168,7 +170,9 @@ export async function gastoPorAnuncio({ desde, hasta, todo = false }) {
           impresiones: Number(f.impressions) || 0,
           nombre: f.ad_name || null,
           conjunto: f.adset_name || null,
-          campana: f.campaign_name || null
+          adset_id: f.adset_id || null,
+          campana: f.campaign_name || null,
+          campaign_id: f.campaign_id || null
         });
         gasto += g;
       }
@@ -182,6 +186,50 @@ export async function gastoPorAnuncio({ desde, hasta, todo = false }) {
     console.warn('⚠️ [META ADS] No se pudo leer el gasto:', err.message);
     return null;
   }
+}
+
+/**
+ * Consulta un anuncio específico en Meta Graph API para saber su nombre,
+ * conjunto de anuncios (adset) y campaña en tiempo real.
+ *
+ * Se ejecuta al recibir un primer mensaje de un anuncio para atribuir de
+ * inmediato el conjunto al chat.
+ */
+export async function consultarAnuncioMeta(adId, tokenAlternativo = null) {
+  const idLimpio = String(adId || '').replace(/\D/g, '');
+  if (!idLimpio || idLimpio.length < 6) return null;
+
+  const { token: adsToken, version, appSecret } = ajustes();
+  const tokens = [adsToken, tokenAlternativo].filter(Boolean);
+  if (!tokens.length) return null;
+
+  for (const t of tokens) {
+    try {
+      const url = new URL(`${API}/${version}/${idLimpio}`);
+      url.searchParams.set('fields', 'id,name,adset_id,adset{id,name},campaign{id,name}');
+      url.searchParams.set('access_token', t);
+      if (appSecret && t === adsToken) {
+        url.searchParams.set('appsecret_proof', crypto.createHmac('sha256', appSecret).update(t).digest('hex'));
+      }
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.id) {
+        const datos = {
+          nombre: data.name || null,
+          conjunto: data.adset?.name || null,
+          adsetId: data.adset?.id || data.adset_id || null,
+          campana: data.campaign?.name || null,
+          campaignId: data.campaign?.id || null
+        };
+        await anuncioRepository.nombrar(idLimpio, datos);
+        return { id: idLimpio, ...datos };
+      }
+    } catch {
+      // Ignorar fallo de este token e intentar con el siguiente
+    }
+  }
+
+  return null;
 }
 
 export function estadoMeta() {
@@ -212,7 +260,7 @@ export function iniciarMetaAds() {
 }
 
 export const metaAdsService = {
-  conectado, sincronizarNombres, gastoPorAnuncio, estadoMeta, olvidarCacheMeta, iniciarMetaAds
+  conectado, sincronizarNombres, gastoPorAnuncio, consultarAnuncioMeta, estadoMeta, olvidarCacheMeta, iniciarMetaAds
 };
 
 export default metaAdsService;

@@ -41,12 +41,19 @@ function sumarGasto(datos, meta) {
     vistos.add(String(a.ad_id));
     a.gasto = m?.gasto || 0;
     a.conversaciones_meta = m?.conversaciones_meta || 0;
-    if (m && !a.nombre) { a.nombre = m.nombre; a.conjunto = m.conjunto; a.campana = m.campana; }
+    if (m && !a.nombre) {
+      a.nombre = m.nombre;
+      a.conjunto = m.conjunto;
+      a.adset_id = m.adset_id;
+      a.campana = m.campana;
+      a.campaign_id = m.campaign_id;
+    }
   }
   for (const [id, m] of meta.porAnuncio) {
     if (vistos.has(id) || !(m.gasto > 0)) continue;
     datos.anuncios.push({
-      ad_id: id, nombre: m.nombre, conjunto: m.conjunto, campana: m.campana, titulo: null, texto: null,
+      ad_id: id, nombre: m.nombre, conjunto: m.conjunto, adset_id: m.adset_id,
+      campana: m.campana, campaign_id: m.campaign_id, titulo: null, texto: null,
       conversaciones: 0, vieron_producto: 0, pidieron_comprar: 0, recibieron_datos: 0,
       mandaron_comprobante: 0, compraron: 0, cobrado: 0, molestos: 0,
       gasto: m.gasto, conversaciones_meta: m.conversaciones_meta
@@ -56,6 +63,40 @@ function sumarGasto(datos, meta) {
   datos.meta_desde = meta.desde;
   datos.meta_hasta = meta.hasta;
   datos.anuncios.sort((x, y) =>
+    (y.compraron - x.compraron) || ((y.gasto || 0) - (x.gasto || 0)) || (y.conversaciones - x.conversaciones)
+  );
+
+  // Recalcular agregación por Conjunto de Anuncios con los datos de gasto
+  const vacioCj = () => ({
+    anuncios: 0, conversaciones: 0, vieron_producto: 0, pidieron_comprar: 0,
+    recibieron_datos: 0, mandaron_comprobante: 0, compraron: 0, cobrado: 0, molestos: 0,
+    gasto: 0, conversaciones_meta: 0
+  });
+  const mapConjuntos = new Map();
+  for (const a of datos.anuncios) {
+    const cjClave = a.conjunto || (a.adset_id ? `Conjunto ID ${a.adset_id}` : (a.ad_id ? 'Sin conjunto asignado' : 'Directo (sin anuncio)'));
+    if (!mapConjuntos.has(cjClave)) {
+      mapConjuntos.set(cjClave, {
+        conjunto: cjClave,
+        adset_id: a.adset_id || null,
+        campana: a.campana || null,
+        ...vacioCj()
+      });
+    }
+    const cj = mapConjuntos.get(cjClave);
+    if (a.ad_id) cj.anuncios++;
+    cj.conversaciones += (a.conversaciones || 0);
+    cj.vieron_producto += (a.vieron_producto || 0);
+    cj.pidieron_comprar += (a.pidieron_comprar || 0);
+    cj.recibieron_datos += (a.recibieron_datos || 0);
+    cj.mandaron_comprobante += (a.mandaron_comprobante || 0);
+    cj.compraron += (a.compraron || 0);
+    cj.cobrado += (a.cobrado || 0);
+    cj.molestos += (a.molestos || 0);
+    cj.gasto += (a.gasto || 0);
+    cj.conversaciones_meta += (a.conversaciones_meta || 0);
+  }
+  datos.conjuntos = [...mapConjuntos.values()].sort((x, y) =>
     (y.compraron - x.compraron) || ((y.gasto || 0) - (x.gasto || 0)) || (y.conversaciones - x.conversaciones)
   );
 }
@@ -83,7 +124,7 @@ export const anuncioController = {
     }
   },
 
-  /** PATCH /api/anuncios/:adId  { nombre, conjunto?, campana? } */
+  /** PATCH /api/anuncios/:adId  { nombre, conjunto?, adsetId?, campana? } */
   async nombrar(req, res) {
     try {
       if (!esAdmin(req)) return res.status(403).json({ error: 'Solo un administrador puede nombrar anuncios.' });
@@ -91,7 +132,7 @@ export const anuncioController = {
       if (!/^\d{6,30}$/.test(adId)) return res.status(400).json({ error: 'Ese no parece el identificador de un anuncio.' });
       const b = req.body || {};
       const fila = await anuncioRepository.nombrar(adId, {
-        nombre: b.nombre, conjunto: b.conjunto, campana: b.campana
+        nombre: b.nombre, conjunto: b.conjunto, adsetId: b.adsetId || b.adset_id, campana: b.campana, campaignId: b.campaignId || b.campaign_id
       });
       return res.json(fila);
     } catch (err) {

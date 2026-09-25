@@ -28,18 +28,22 @@ export const anuncioRepository = {
   async visto(atribucion, plataforma = null) {
     const adId = limpio(atribucion?.adId, 100);
     if (!adId) return;
+    const adsetId = limpio(atribucion?.adsetId, 100);
+    const conjunto = limpio(atribucion?.conjunto, 160);
     try {
       await query(
-        `INSERT INTO anuncios (ad_id, titulo, texto, url, plataforma)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO anuncios (ad_id, titulo, texto, url, plataforma, adset_id, conjunto)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (ad_id) DO UPDATE
            SET titulo     = COALESCE(EXCLUDED.titulo, anuncios.titulo),
                texto      = COALESCE(EXCLUDED.texto, anuncios.texto),
                url        = COALESCE(EXCLUDED.url, anuncios.url),
                plataforma = COALESCE(anuncios.plataforma, EXCLUDED.plataforma),
+               adset_id   = COALESCE(anuncios.adset_id, EXCLUDED.adset_id),
+               conjunto   = COALESCE(anuncios.conjunto, EXCLUDED.conjunto),
                ultima_vez = CURRENT_TIMESTAMP`,
         [adId, limpio(atribucion.titulo, 500), limpio(atribucion.texto, 2000),
-         limpio(atribucion.sourceUrl, 1000), plataforma]
+         limpio(atribucion.sourceUrl, 1000), plataforma, adsetId, conjunto]
       );
     } catch (err) {
       // Que no se pueda anotar el anuncio nunca puede frenar el mensaje.
@@ -47,27 +51,29 @@ export const anuncioRepository = {
     }
   },
 
-  /** Pone o cambia el nombre de un anuncio. Un campo vacío lo borra. */
-  async nombrar(adId, { nombre, conjunto, campana } = {}) {
+  /** Pone o cambia el nombre de un anuncio y su conjunto/campaña. */
+  async nombrar(adId, { nombre, conjunto, adsetId, campana, campaignId } = {}) {
     const id = limpio(adId, 100);
     if (!id) return null;
     const { rows } = await query(
-      `INSERT INTO anuncios (ad_id, nombre, conjunto, campana, primera_vez, ultima_vez)
-       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `INSERT INTO anuncios (ad_id, nombre, conjunto, campana, adset_id, campaign_id, primera_vez, ultima_vez)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        ON CONFLICT (ad_id) DO UPDATE
-         SET nombre     = CASE WHEN $5 THEN EXCLUDED.nombre   ELSE anuncios.nombre   END,
-             conjunto   = CASE WHEN $6 THEN EXCLUDED.conjunto ELSE anuncios.conjunto END,
-             campana    = CASE WHEN $7 THEN EXCLUDED.campana  ELSE anuncios.campana  END,
-             updated_at = CURRENT_TIMESTAMP
+         SET nombre      = CASE WHEN $7  THEN EXCLUDED.nombre      ELSE anuncios.nombre      END,
+             conjunto    = CASE WHEN $8  THEN EXCLUDED.conjunto    ELSE anuncios.conjunto    END,
+             campana     = CASE WHEN $9  THEN EXCLUDED.campana     ELSE anuncios.campana     END,
+             adset_id    = CASE WHEN $10 THEN EXCLUDED.adset_id    ELSE anuncios.adset_id    END,
+             campaign_id = CASE WHEN $11 THEN EXCLUDED.campaign_id ELSE anuncios.campaign_id END,
+             updated_at  = CURRENT_TIMESTAMP
        RETURNING *`,
-      [id, limpio(nombre), limpio(conjunto), limpio(campana),
-       nombre !== undefined, conjunto !== undefined, campana !== undefined]
+      [id, limpio(nombre), limpio(conjunto), limpio(campana), limpio(adsetId, 100), limpio(campaignId, 100),
+       nombre !== undefined, conjunto !== undefined, campana !== undefined, adsetId !== undefined, campaignId !== undefined]
     );
     return rows[0] || null;
   },
 
   /**
-   * Rendimiento de cada anuncio entre dos fechas.
+   * Rendimiento de cada anuncio y de cada conjunto entre dos fechas.
    *
    * @param {{ desde: Date, hasta: Date, teamId?: number|null }} p
    */
@@ -130,7 +136,7 @@ export const anuncioRepository = {
     const datos = new Map();
     if (ids.length) {
       const { rows: an } = await query(
-        `SELECT ad_id, nombre, conjunto, campana, titulo, texto, plataforma
+        `SELECT ad_id, nombre, conjunto, adset_id, campana, campaign_id, titulo, texto, plataforma
            FROM anuncios WHERE ad_id = ANY($1::text[])`,
         [ids]
       );
@@ -143,7 +149,9 @@ export const anuncioRepository = {
         ad_id: id || null,
         nombre: d.nombre || null,
         conjunto: d.conjunto || null,
+        adset_id: d.adset_id || null,
         campana: d.campana || null,
+        campaign_id: d.campaign_id || null,
         titulo: d.titulo || null,
         texto: d.texto || null,
         ...n
@@ -152,7 +160,38 @@ export const anuncioRepository = {
       (y.compraron - x.compraron) || (y.conversaciones - x.conversaciones)
     );
 
-    return { total, anuncios };
+    // Agrupación por Conjunto de Anuncios (Ad Set)
+    const vacioCj = () => ({
+      anuncios: 0, conversaciones: 0, vieron_producto: 0, pidieron_comprar: 0,
+      recibieron_datos: 0, mandaron_comprobante: 0, compraron: 0, cobrado: 0, molestos: 0
+    });
+    const mapConjuntos = new Map();
+    for (const a of anuncios) {
+      const cjClave = a.conjunto || (a.adset_id ? `Conjunto ID ${a.adset_id}` : (a.ad_id ? 'Sin conjunto asignado' : 'Directo (sin anuncio)'));
+      if (!mapConjuntos.has(cjClave)) {
+        mapConjuntos.set(cjClave, {
+          conjunto: cjClave,
+          adset_id: a.adset_id || null,
+          campana: a.campana || null,
+          ...vacioCj()
+        });
+      }
+      const cj = mapConjuntos.get(cjClave);
+      if (a.ad_id) cj.anuncios++;
+      cj.conversaciones += a.conversaciones;
+      cj.vieron_producto += a.vieron_producto;
+      cj.pidieron_comprar += a.pidieron_comprar;
+      cj.recibieron_datos += a.recibieron_datos;
+      cj.mandaron_comprobante += a.mandaron_comprobante;
+      cj.compraron += a.compraron;
+      cj.cobrado += a.cobrado;
+      cj.molestos += a.molestos;
+    }
+    const conjuntos = [...mapConjuntos.values()].sort((x, y) =>
+      (y.compraron - x.compraron) || (y.conversaciones - x.conversaciones)
+    );
+
+    return { total, anuncios, conjuntos };
   }
 };
 
@@ -196,6 +235,7 @@ export function leerListaDeAnuncios(texto) {
   const salida = [];
   if (iId >= 0 && iNombre >= 0) {
     const iConjunto = col('nombre del conjunto de anuncios', 'conjunto de anuncios', 'ad set name');
+    const iAdsetId = col('identificador del conjunto de anuncios', 'id del conjunto de anuncios', 'ad set id');
     const iCampana = col('nombre de la campana', 'campana', 'campaign name');
     for (const linea of lineas.slice(1)) {
       const c = partir(linea);
@@ -205,6 +245,7 @@ export function leerListaDeAnuncios(texto) {
         ad_id: id,
         nombre: c[iNombre],
         conjunto: iConjunto >= 0 ? c[iConjunto] || null : undefined,
+        adsetId: iAdsetId >= 0 ? (c[iAdsetId] || '').replace(/\D/g, '') || null : undefined,
         campana: iCampana >= 0 ? c[iCampana] || null : undefined
       });
     }

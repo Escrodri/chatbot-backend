@@ -317,6 +317,19 @@ export const orderRepository = {
       params
     );
 
+    const { rows: porConjunto } = await query(
+      `SELECT COALESCE(an.conjunto, c.source_adset_id, 'sin_conjunto') AS conjunto,
+              o.etapa,
+              COUNT(*)::int AS cantidad
+       FROM orders o
+       INNER JOIN conversations c ON o.conversation_id = c.id
+       LEFT JOIN anuncios an ON an.ad_id = c.source_ad_id
+       ${filtro}
+       GROUP BY 1, 2
+       ORDER BY 1`,
+      params
+    );
+
     // Se devuelve la escalera completa, con ceros incluidos: un embudo al que
     // le faltan los escalones vacíos se lee como si nadie se hubiera caído ahí,
     // cuando es justo al revés.
@@ -333,6 +346,12 @@ export const orderRepository = {
       if (f.etapa in anuncios[f.anuncio]) anuncios[f.anuncio][f.etapa] = f.cantidad;
     }
 
+    const conjuntos = {};
+    for (const f of porConjunto) {
+      if (!conjuntos[f.conjunto]) conjuntos[f.conjunto] = vacio();
+      if (f.etapa in conjuntos[f.conjunto]) conjuntos[f.conjunto][f.etapa] = f.cantidad;
+    }
+
     // `etapa` es hasta dónde llegó cada uno, así que cada casilla contaba
     // solo a los que se quedaron justo ahí: "recibió datos: 3" eran los que
     // recibieron datos y NO siguieron. El panel lo muestra como "cuántos
@@ -347,8 +366,9 @@ export const orderRepository = {
     };
     acumular(general);
     for (const k of Object.keys(anuncios)) acumular(anuncios[k]);
+    for (const k of Object.keys(conjuntos)) acumular(conjuntos[k]);
 
-    return { etapas: ETAPAS, general, anuncios };
+    return { etapas: ETAPAS, general, anuncios, conjuntos };
   },
 
   /**
