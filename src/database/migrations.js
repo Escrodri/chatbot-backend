@@ -399,7 +399,12 @@ export async function initDatabase() {
         GROUP BY source_ad_id
        ON CONFLICT (ad_id) DO NOTHING`,
       'CREATE INDEX IF NOT EXISTS idx_conversations_anuncio ON conversations (source_ad_id, created_at)',
-      'CREATE INDEX IF NOT EXISTS idx_conversations_creada ON conversations (created_at)'
+      'CREATE INDEX IF NOT EXISTS idx_conversations_creada ON conversations (created_at)',
+
+      // De qué producto se está hablando en cada conversación. Con varios
+      // productos, un "bueno" o la foto del comprobante no dicen de cuál se
+      // trata: se toma este, que cambia solo cuando la persona elige otro.
+      'ALTER TABLE conversations ADD COLUMN IF NOT EXISTS producto_foco_id INTEGER'
     ];
 
     for (const sql of columnMigrations) {

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { conversationController } from '../controllers/conversation.controller.js';
 import { requireAuth } from '../middlewares/auth.middleware.js';
 import { requireAuthOrService } from '../middlewares/service-auth.middleware.js';
+import { productoFocoController } from '../controllers/producto-foco.controller.js';
 import { tagController } from '../controllers/tag.controller.js';
 
 export const conversationRouter = Router();
@@ -37,6 +38,10 @@ conversationRouter.post('/:id/molesto', requireAuthOrService, conversationContro
 // la etiqueta sola cada vez que no entrega; esta ruta es para lo que se resuelve
 // antes, en el guion, y por eso nunca llega hasta ella.
 conversationRouter.post('/:id/verificar', requireAuthOrService, conversationController.marcarParaVerificar);
+
+// De qué producto se está hablando en esta conversación. Lo pregunta el guion
+// con cada mensaje: con varios productos, un "bueno" o una foto no lo dicen.
+conversationRouter.post('/:id/producto', requireAuthOrService, productoFocoController.resolver);
 
 // Reintentar el envío de un mensaje que Meta rechazó (conserva el adjunto)
 conversationRouter.post('/:id/messages/:messageId/retry', requireAuth, conversationController.retryMessage);

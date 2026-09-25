@@ -436,13 +436,28 @@ export const orderRepository = {
          -- más tarde, no recuperan a nadie: le confirman a esa persona que del
          -- otro lado hay una máquina que no leyó lo que escribió.
          AND c.molesto_at IS NULL
+         -- Con varios productos, una persona puede tener dos pedidos a
+         -- medio camino. Recibe un solo seguimiento: si a otro de sus pedidos
+         -- ya se le insistió hace poco, este espera.
+         AND NOT EXISTS (
+           SELECT 1 FROM orders o2
+            WHERE o2.conversation_id = o.conversation_id AND o2.id <> o.id
+              AND o2.recuperacion_at > CURRENT_TIMESTAMP - INTERVAL '12 hours'
+         )
        ORDER BY array_position($1::text[], o.etapa) DESC,
                 GREATEST(o.etapa_at, c.last_customer_interaction) ASC
        LIMIT $3`,
       [ETAPAS, maxNivel, limite]
     );
 
-    return rows;
+    // Y de los que quedan, uno por persona: el que llegó más lejos (la
+    // consulta ya viene ordenada así).
+    const vistas = new Set();
+    return rows.filter(r => {
+      if (vistas.has(r.conversation_id)) return false;
+      vistas.add(r.conversation_id);
+      return true;
+    });
   },
 
   /**

@@ -34,6 +34,25 @@ function normalizarBotones(botones) {
 }
 
 /**
+ * Una lista de WhatsApp dentro de sus límites: hasta 10 opciones, títulos de
+ * 24 letras, descripciones de 72 y el texto del botón de 20. Meta rechaza el
+ * mensaje entero si una sola opción se pasa.
+ */
+function normalizarLista(lista) {
+  if (!lista || !Array.isArray(lista.opciones)) return null;
+  const opciones = lista.opciones
+    .filter(o => o && typeof o.title === 'string' && o.title.trim())
+    .slice(0, 10)
+    .map((o, i) => ({
+      id: String(o.id || o.title).trim().slice(0, 200) || `op_${i}`,
+      title: o.title.trim().slice(0, 24),
+      description: o.description ? String(o.description).trim().slice(0, 72) : ''
+    }));
+  if (!opciones.length) return null;
+  return { boton: String(lista.boton || 'Ver opciones').trim().slice(0, 20) || 'Ver opciones', opciones };
+}
+
+/**
  * Servicio Oficial Meta Graph API v21.0:
  * Despacha mensajes salientes hacia WhatsApp Cloud API, Facebook Messenger e Instagram Direct.
  * Implementa la etiqueta HUMAN_AGENT (ventana de 7 días) y soporte de plantillas HSM para WhatsApp fuera de 24h.
@@ -82,7 +101,8 @@ export const graphApiService = {
     localFilePath = null,
     mimeType = null,
     isViewOnce = false,
-    buttons = []
+    buttons = [],
+    lista = null
   }) {
     const apiVersion = config.meta.apiVersion || 'v26.0';
     const accessToken = channel.accessToken;
@@ -154,8 +174,9 @@ export const graphApiService = {
     // opciones, se escriben como texto al final: la persona igual sabe qué
     // puede contestar, y el guion reconoce esas mismas palabras porque son las
     // que ya venía leyendo antes de que existieran los botones.
+    const listaValida = normalizarLista(lista);
     if (channel.platform !== 'whatsapp') {
-      const comoTexto = normalizarBotones(buttons);
+      const comoTexto = listaValida ? listaValida.opciones : normalizarBotones(buttons);
       if (comoTexto.length > 0) {
         effectiveText = `${effectiveText}\n\n${comoTexto.map(b => `• ${b.title}`).join('\n')}`.trim();
       }
@@ -165,6 +186,33 @@ export const graphApiService = {
     if (channel.platform === 'whatsapp') {
       const url = `${META_API_BASE}/${apiVersion}/${channel.channel_identifier}/messages`;
       let payload;
+
+      // Mensaje con lista: para elegir entre más de tres opciones (los
+      // productos del catálogo). WhatsApp muestra un botón que abre la lista.
+      if (listaValida) {
+        payload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: recipientId,
+          type: 'interactive',
+          interactive: {
+            type: 'list',
+            body: { text: (effectiveText || '').slice(0, 1024) },
+            action: {
+              button: listaValida.boton,
+              sections: [{
+                title: 'Materiales',
+                rows: listaValida.opciones.map(o => ({
+                  id: o.id,
+                  title: o.title,
+                  ...(o.description ? { description: o.description } : {})
+                }))
+              }]
+            }
+          }
+        };
+        return this._postToMeta(url, accessToken, payload, channel, (data) => data.messages?.[0]?.id);
+      }
 
       const botonesValidos = normalizarBotones(buttons);
 

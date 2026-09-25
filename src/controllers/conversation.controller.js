@@ -247,7 +247,7 @@ export const conversationController = {
       // botones: mandar la misma imagen subiéndola de nuevo en base64 obligaba
       // a bajarla y volver a subirla en cada conversación, y para una portada
       // que no cambia nunca eso es trabajo repetido sin ninguna ganancia.
-      const { text, fileBase64, fileName, mimeType, view_once, buttons, media_url } = req.body;
+      const { text, fileBase64, fileName, mimeType, view_once, buttons, media_url, lista } = req.body;
 
       if (isNaN(id)) {
         return res.status(400).json({ error: 'ID de conversación inválido' });
@@ -374,7 +374,8 @@ export const conversationController = {
             mimeType: savedMedia?.mimeType,
             lastCustomerInteraction: conv.last_customer_interaction,
             viewOnce: view_once && contentType === 'image',
-            buttons
+            buttons,
+            lista
           });
           metaMessageId = sendResult?.metaMessageId || null;
 
