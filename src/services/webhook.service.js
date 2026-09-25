@@ -7,6 +7,7 @@ import { mediaService } from './media.service.js';
 import { graphApiService } from './graph-api.service.js';
 import { pool } from '../database/pool.js';
 import { detectarCampana } from './precio.service.js';
+import { anuncioRepository } from '../repositories/anuncio.repository.js';
 
 /**
  * Cuando n8n no contesta, que se note en la bandeja.
@@ -184,6 +185,7 @@ export const webhookService = {
         });
         const conversacion = await conversationRepository.findOrCreateByContact(channel.id, contacto.id);
         await conversationRepository.saveAttribution(conversacion.id, event.attribution || {});
+        await anuncioRepository.visto(event.attribution, event.platform);
         if (event.accountId) await channelRepository.saveAccountId(channel.id, event.accountId);
 
         // Si el anuncio es de una campaña, el precio lo tiene que estar
@@ -249,6 +251,7 @@ export const webhookService = {
       if (event.attribution) {
         try {
           await conversationRepository.saveAttribution(conversation.id, event.attribution);
+          await anuncioRepository.visto(event.attribution, event.platform);
           if (event.attribution.ctwaClid || event.attribution.adId) {
             console.log(
               `🎯 [ATRIBUCIÓN] Conversación #${conversation.id} viene del anuncio ` +

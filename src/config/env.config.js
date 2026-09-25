@@ -288,6 +288,17 @@ export const envConfig = Object.freeze({
   // otro día a la mañana: pagó dentro de la promo y no tiene por qué perderla.
   // Al cliente no se le anuncia: se le dice la fecha de corte y la gracia es
   // una cortesía silenciosa.
+  // Lectura del Administrador de anuncios: nombres y gasto por anuncio.
+  // Solo lectura (ads_read). Sin estas variables el panel funciona igual.
+  metaAds: {
+    token: (process.env.META_ADS_TOKEN || '').trim(),
+    cuentas: (process.env.META_AD_ACCOUNT_ID || '')
+      .split(',')
+      .map(s => s.trim().replace(/^act_/, ''))
+      .filter(s => /^\d+$/.test(s)),
+    appSecret: (process.env.META_ADS_APP_SECRET || '').trim(),
+  },
+
   ofertas: {
     recuperacionHoras: parseInt(process.env.OFERTA_RECUPERACION_HORAS || '72', 10),
     graciaHoras: parseInt(process.env.OFERTA_GRACIA_HORAS || '24', 10),

@@ -369,7 +369,37 @@ export async function initDatabase() {
           AND NOT EXISTS (
             SELECT 1 FROM ofertas f
              WHERE f.conversation_id = o.conversation_id AND f.origen = 'recuperacion'
-          )`
+          )`,
+
+      // De qué anuncio viene cada persona, con nombre.
+      //
+      // Meta manda en el primer mensaje el identificador del anuncio y, en
+      // WhatsApp, el título y el texto que la persona vio. El nombre que le
+      // pusiste en el Administrador de anuncios ("CREATIVO A — CONTROL") no
+      // viene nunca: se carga desde el panel. Sin esta tabla el panel solo
+      // puede mostrar números de 18 cifras.
+      `CREATE TABLE IF NOT EXISTS anuncios (
+         ad_id        VARCHAR(100) PRIMARY KEY,
+         nombre       VARCHAR(160),
+         conjunto     VARCHAR(160),
+         campana      VARCHAR(160),
+         titulo       TEXT,
+         texto        TEXT,
+         url          TEXT,
+         plataforma   VARCHAR(20),
+         primera_vez  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         ultima_vez   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         updated_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+       )`,
+      // Los anuncios que ya trajeron gente antes de que existiera la tabla.
+      `INSERT INTO anuncios (ad_id, primera_vez, ultima_vez)
+       SELECT source_ad_id, MIN(created_at), MAX(created_at)
+         FROM conversations
+        WHERE source_ad_id IS NOT NULL AND source_ad_id <> ''
+        GROUP BY source_ad_id
+       ON CONFLICT (ad_id) DO NOTHING`,
+      'CREATE INDEX IF NOT EXISTS idx_conversations_anuncio ON conversations (source_ad_id, created_at)',
+      'CREATE INDEX IF NOT EXISTS idx_conversations_creada ON conversations (created_at)'
     ];
 
     for (const sql of columnMigrations) {

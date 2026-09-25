@@ -5,6 +5,7 @@ import { socketManager } from './sockets/index.js';
 import { initDatabase } from './database/index.js';
 import { logRepository } from './repositories/log.repository.js';
 import { recoveryService } from './services/recovery.service.js';
+import { iniciarMetaAds } from './services/meta-ads.service.js';
 
 const server = http.createServer(app);
 
@@ -67,6 +68,13 @@ server.listen(config.port, () => {
   // Recuperación de abandonos. Si falla al arrancar, el servidor sigue
   // atendiendo: dejar de insistirle a los que se fueron es perder ventas, no
   // dejar de vender.
+  // Nombres y gasto de los anuncios, desde el Administrador de anuncios.
+  try {
+    iniciarMetaAds();
+  } catch (err) {
+    console.warn('⚠️ [META ADS] No se pudo iniciar:', err.message);
+  }
+
   try {
     recoveryService.iniciar();
   } catch (err) {

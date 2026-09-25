@@ -56,6 +56,7 @@ export const conversationRepository = {
          c.id, c.channel_id, c.contact_id, c.last_message_text, c.last_message_time,
          c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id, c.created_at,
          c.ctwa_clid, c.source_ad_id, c.source_type, c.source_url,
+         an.nombre as anuncio_nombre, an.conjunto as anuncio_conjunto, an.titulo as anuncio_titulo,
          ct.name as contact_name, ct.phone_or_username as contact_phone, ct.avatar_url as contact_avatar, ct.platform_user_id,
          COALESCE(ch.platform, ct.platform) as platform, 
          COALESCE(ch.name, 'Canal Desconectado') as channel_name, 
@@ -65,6 +66,7 @@ export const conversationRepository = {
        FROM conversations c
        INNER JOIN contacts ct ON c.contact_id = ct.id
        LEFT JOIN channels ch ON c.channel_id = ch.id
+       LEFT JOIN anuncios an ON an.ad_id = c.source_ad_id
        WHERE c.id = $1`,
       [id]
     );
@@ -286,6 +288,9 @@ export const conversationRepository = {
         c.id, c.channel_id, c.contact_id, c.last_message_text, c.last_message_time,
         c.last_customer_interaction, c.unread_count, c.bot_status, c.assigned_user_id,
         c.source_ad_id,
+        -- De qué anuncio vino, con el nombre que tiene en el Administrador
+        -- de anuncios. La bandeja lo muestra en cada chat.
+        an.nombre as anuncio_nombre, an.conjunto as anuncio_conjunto, an.titulo as anuncio_titulo,
         -- Si esta persona se enojó o nos trató de estafadores. La bandeja lo
         -- marca para que se lo mire antes que a ningún otro chat.
         c.molesto_at,
@@ -314,6 +319,7 @@ export const conversationRepository = {
       FROM conversations c
       INNER JOIN contacts ct ON c.contact_id = ct.id
       LEFT JOIN channels ch ON c.channel_id = ch.id
+      LEFT JOIN anuncios an ON an.ad_id = c.source_ad_id
       -- Estado de venta de la conversacion, para etiquetarla en la bandeja.
       -- LATERAL trae solo el pedido mas reciente de cada chat en la MISMA
       -- consulta: sin esto harian falta N consultas extra, una por conversacion.

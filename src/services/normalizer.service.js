@@ -154,7 +154,11 @@ export const normalizerService = {
                   ctwaClid: ref.ctwa_clid || null,
                   adId: ref.source_id || null,
                   sourceType: ref.source_type || null,
-                  sourceUrl: ref.source_url || null
+                  sourceUrl: ref.source_url || null,
+                  // Lo que la persona vio en el anuncio. Sirve para reconocerlo
+                  // en el panel aunque todavía no tenga nombre.
+                  titulo: ref.headline || null,
+                  texto: ref.body || null
                 } : null,
                 accountId: entry.id || null, // Identificador de la cuenta de WhatsApp Business
                 sender: {
@@ -259,7 +263,9 @@ export const normalizerService = {
                 ctwaClid: ref.ctwa_clid || null,
                 adId: ref.ad_id || null,
                 sourceType: ref.source || ref.type || null,
-                sourceUrl: ref.ref || null
+                sourceUrl: ref.ref || null,
+                titulo: ref.ads_context_data?.ad_title || null,
+                texto: null
               } : null,
               accountId: String(pageId || channelId),
               sender: {
@@ -300,7 +306,9 @@ export const normalizerService = {
                   ctwaClid: item.referral.ctwa_clid || null,
                   adId: item.referral.ad_id || null,
                   sourceType: item.referral.source || item.referral.type || null,
-                  sourceUrl: item.referral.ref || null
+                  sourceUrl: item.referral.ref || null,
+                  titulo: item.referral.ads_context_data?.ad_title || null,
+                  texto: null
                 },
                 accountId: String(pageId || item.recipient?.id)
               });

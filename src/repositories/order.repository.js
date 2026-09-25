@@ -333,6 +333,21 @@ export const orderRepository = {
       if (f.etapa in anuncios[f.anuncio]) anuncios[f.anuncio][f.etapa] = f.cantidad;
     }
 
+    // `etapa` es hasta dónde llegó cada uno, así que cada casilla contaba
+    // solo a los que se quedaron justo ahí: "recibió datos: 3" eran los que
+    // recibieron datos y NO siguieron. El panel lo muestra como "cuántos
+    // llegaron a este paso", que es la suma de ese paso y todos los de después.
+    const acumular = (m) => {
+      let suma = 0;
+      for (let i = ETAPAS.length - 1; i >= 0; i--) {
+        suma += m[ETAPAS[i]] || 0;
+        m[ETAPAS[i]] = suma;
+      }
+      return m;
+    };
+    acumular(general);
+    for (const k of Object.keys(anuncios)) acumular(anuncios[k]);
+
     return { etapas: ETAPAS, general, anuncios };
   },
 

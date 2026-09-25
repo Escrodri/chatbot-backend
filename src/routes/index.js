@@ -14,6 +14,7 @@ import { tagRouter } from './tag.routes.js';
 import { mediaRouter } from './media.routes.js';
 import { automationRouter } from './automation.routes.js';
 import { campanaRouter } from './campana.routes.js';
+import { anuncioRouter } from './anuncio.routes.js';
 import { config } from '../config/index.js';
 
 export const apiRouter = Router();
@@ -38,6 +39,7 @@ apiRouter.use('/orders', orderRouter);
 
 // Campañas de precio: remarketing y promos con fecha
 apiRouter.use('/campanas', campanaRouter);
+apiRouter.use('/anuncios', anuncioRouter);
 
 // Métricas de ventas, leads y rendimiento de productos y asesores
 apiRouter.use('/analytics', analyticsRouter);
