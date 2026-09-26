@@ -2,15 +2,18 @@ import { pool } from '../database/pool.js';
 
 const nuevoResumen = `📦 Mirá todo lo que incluye el material:
 
-1️⃣ 10 Grandes Historias Bíblicas completas: narradas paso a paso en 50 partes.
-2️⃣ 50 Láminas para Colorear: trazos claros ideales para lápices o crayolas (3 a 10 años).
-3️⃣ 50 Lecciones Bíblicas para el Corazón: perdón, obediencia, valentía y amor de Dios.
-4️⃣ 🏆 Diploma de "Pequeño Conocedor de la Biblia": listo para imprimir y premiar su dedicación.
+1️⃣ 10 Grandes Historias Bíblicas completas: Desde La Creación del Mundo y El Arca de Noé hasta El Nacimiento de Jesús y La Resurrección, narradas paso a paso en 50 partes.
+2️⃣ 50 Láminas para Colorear: Dibujos hermosos con trazos claros ideales para lápices, crayolas o témperas (de 3 a 10 años).
+3️⃣ 50 Lecciones Bíblicas para el Corazón: Cada página trae una reflexión diaria para conversar en familia sobre el perdón, la obediencia, la valentía y el amor de Dios.
+4️⃣ 🏆 Diploma de "Pequeño Conocedor de la Biblia": Certificado al final del libro listo para imprimir y premiar su dedicación cuando complete las historias.
 
-✨ Ventaja única: Formato digital PDF, lo imprimís en casa o en librería las veces que quieras.
+✨ Ventaja única: Al ser en formato digital PDF, lo guardás en tu celular y lo imprimís en casa o en una librería las veces que quieras (ideal si tenés más de un niño o para volver a pintar).
+
 🔥 Precio promocional hoy: Gs. 19.000 (pago único, acceso para siempre directo a tu WhatsApp)
 
-¿Cómo te gustaría continuar? Elegí una opción 👇`;
+¿Cómo te gustaría continuar? Elegí una opción 👇
+1️⃣ Ver páginas por dentro 🖼️
+2️⃣ Lo quiero ya 📲`;
 
 const deliveryNote = `Recomendación: Impriman una historia por semana para hacer juntos el devocional familiar. ¡Que sea de gran bendición para tu hogar! ✨`;
 
