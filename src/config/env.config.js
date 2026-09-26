@@ -169,7 +169,7 @@ export const envConfig = Object.freeze({
     // persona siga escribiendo. Casi nadie manda una sola línea: escriben
     // "hola", después "queria consultar", después la pregunta. Contestar cada
     // línea por separado es la marca más evidente de que hay una máquina.
-    debounceMs: parseInt(process.env.AUTOMATION_DEBOUNCE_MS || '8000', 10),
+    debounceMs: parseInt(process.env.AUTOMATION_DEBOUNCE_MS || '12000', 10),
 
     // Cuántas horas puede quedar un chat esperando a una persona antes de que
     // el bot lo retome.

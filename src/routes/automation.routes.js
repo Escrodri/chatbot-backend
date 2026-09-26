@@ -11,4 +11,8 @@ automationRouter.get('/health', requireAuth, automationController.health);
 // Apagar el aviso después de leerlo.
 automationRouter.post('/ack', requireAuth, automationController.ack);
 
+// Parámetros de la automatización (debounce)
+automationRouter.get('/settings', requireAuth, automationController.getSettings);
+automationRouter.put('/settings', requireAuth, automationController.updateSettings);
+
 export default automationRouter;

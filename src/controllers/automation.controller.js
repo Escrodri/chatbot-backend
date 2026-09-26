@@ -37,6 +37,35 @@ export const automationController = {
   async ack(req, res) {
     automationService.reconocerFallo();
     return res.json({ ok: true });
+  },
+
+  /**
+   * GET /api/automation/settings
+   *
+   * Devuelve los parámetros configurados para la automatización (como tiempo de debounce).
+   */
+  async getSettings(req, res) {
+    try {
+      const debounceSeconds = await automationService.obtenerDebounceSegundos();
+      return res.json({ ok: true, debounceSeconds });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * PUT /api/automation/settings
+   *
+   * Actualiza el tiempo de espera (debounce) en segundos.
+   */
+  async updateSettings(req, res) {
+    try {
+      const { debounceSeconds } = req.body;
+      const actualizado = await automationService.actualizarDebounceSegundos(debounceSeconds, req.user?.id);
+      return res.json({ ok: true, debounceSeconds: actualizado });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
   }
 };
 

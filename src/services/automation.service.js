@@ -1,7 +1,31 @@
 import { config } from '../config/index.js';
 import { channelRepository } from '../repositories/channel.repository.js';
 import { conversationRepository } from '../repositories/conversation.repository.js';
+import { settingRepository } from '../repositories/setting.repository.js';
 import { graphApiService } from './graph-api.service.js';
+
+export const CLAVE_AJUSTE_DEBOUNCE = 'automation_debounce_seconds';
+export const DEBOUNCE_SEGUNDOS_POR_DEFECTO = 12;
+
+/**
+ * Obtiene el tiempo de espera (debounce) en milisegundos.
+ * Se consulta en caliente desde la tabla de ajustes para permitir configurarlo sin reiniciar.
+ * Si no está definido en la BD, usa config.automation?.debounceMs o 12 segundos por defecto.
+ */
+async function obtenerDebounceMs() {
+  try {
+    const ajuste = await settingRepository.leer(CLAVE_AJUSTE_DEBOUNCE, null);
+    if (ajuste !== null && ajuste !== undefined) {
+      const segs = Number(ajuste);
+      if (Number.isFinite(segs) && segs > 0) {
+        return Math.round(segs * 1000);
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ [AUTOMATION] Error al leer ajuste debounce, usando valor por defecto:', err.message);
+  }
+  return config.automation?.debounceMs ?? (DEBOUNCE_SEGUNDOS_POR_DEFECTO * 1000);
+}
 
 /**
  * Puente hacia n8n.
@@ -261,19 +285,22 @@ function mostrarEscribiendo(channel, message) {
   })();
 }
 
-function programarDespacho(clave, grupo) {
+async function programarDespacho(clave, grupo) {
+  const msEspera = await obtenerDebounceMs();
+  const segs = Math.round(msEspera / 1000);
+
+  console.log(`⏳ [AUTOMATION] Conversación #${clave}: ${grupo.mensajes.length} mensaje(s) en cola. Esperando ${segs}s para agrupar antes de enviar a n8n...`);
+
   grupo.timer = setTimeout(() => {
     enCola.delete(clave);
+    console.log(`🚀 [AUTOMATION] Conversación #${clave}: tiempo de espera finalizado (${segs}s). Despachando a n8n ${grupo.mensajes.length} mensaje(s) agrupado(s)...`);
     automationService.despachar(grupo).catch(err => {
       console.error('❌ [AUTOMATION] Falló el despacho agrupado:', err.message);
     });
-  }, config.automation?.debounceMs ?? 8000);
-
-  // Que un temporizador pendiente no impida que el proceso termine.
-  if (typeof grupo.timer.unref === 'function') grupo.timer.unref();
+  }, msEspera);
 }
 
-function encolar({ conversation, contact, channel, message }) {
+async function encolar({ conversation, contact, channel, message }) {
   const clave = conversation.id;
   const grupo = enCola.get(clave) || { mensajes: [], timer: null };
 
@@ -294,25 +321,22 @@ function encolar({ conversation, contact, channel, message }) {
   grupo.channel = channel;
   grupo.mensajes.push(message);
 
-  if (grupo.timer) clearTimeout(grupo.timer);
+  if (grupo.timer) {
+    clearTimeout(grupo.timer);
+    grupo.timer = null;
+  }
 
-  // Dos cosas no se hacen esperar.
-  //
-  // Una imagen: quien manda un comprobante quiere respuesta ya, y no hay razón
-  // para pensar que va a seguir escribiendo.
-  //
-  // Y un botón. La espera existe para juntar a alguien que escribe de a
-  // pedacitos —"hola", enter, "queria consultar", enter—, y quien toca un
-  // botón ya dijo todo lo que tenía que decir de una sola vez. Hacerlo esperar
-  // no lo hace más humano, lo hace más lento: del otro lado se ve un botón
-  // tocado y una pantalla que no reacciona.
-  const esTexto = (message.content_type || 'text') === 'text';
+  // Solamente los botones interactivos se despachan sin esperar.
+  // Quien toca un botón ya eligió una opción puntual (ej: "1", "2", "Lo quiero ya").
+  // En cambio, si el cliente manda texto, imágenes, audios o documentos,
+  // se espera el tiempo de debounce porque la gente suele escribir en varias líneas
+  // o mandar la foto y luego redactar "te paso el comprobante / info por favor".
   const esBoton = Boolean(message.boton_id);
 
-  if (!esTexto || esBoton) {
+  if (esBoton) {
     enCola.delete(clave);
     automationService.despachar(grupo).catch(err => {
-      console.error('❌ [AUTOMATION] Falló el despacho inmediato:', err.message);
+      console.error('❌ [AUTOMATION] Falló el despacho inmediato de botón:', err.message);
     });
     return { ok: true, motivo: null, detalle: null, avisar: false, mensaje: null, en: ahora() };
   }
@@ -322,7 +346,7 @@ function encolar({ conversation, contact, channel, message }) {
   // abandonado; con esto, como alguien redactando.
   mostrarEscribiendo(channel, message);
 
-  programarDespacho(clave, grupo);
+  await programarDespacho(clave, grupo);
   enCola.set(clave, grupo);
 
   return {
@@ -561,7 +585,7 @@ export const automationService = {
       conversation.bot_status = 'active';
     }
 
-    return encolar({ conversation, contact, channel, message });
+    return await encolar({ conversation, contact, channel, message });
   },
 
   /**
@@ -594,9 +618,11 @@ export const automationService = {
       console.warn('⚠️ [AUTOMATION] No se pudo confirmar el estado del bot antes de despachar:', err.message);
     }
 
-    // El último mensaje manda para el tipo: si alguien escribe "ya pagué" y
-    // después manda la captura, lo que importa es la captura.
+    // El último mensaje manda para el tipo, pero si algún mensaje del grupo contenía
+    // imagen, audio o documento, preservamos esa media para que n8n no la pierda si el
+    // cliente mandó luego un texto explicativo (ej. comprobante de pago o foto).
     const ultimo = mensajes[mensajes.length - 1];
+    const mensajeConMedia = [...mensajes].reverse().find(m => m.media_url || m.meta_media_id);
 
     // El texto va todo junto, en el orden en que lo escribieron. Para n8n es
     // un solo mensaje de varias líneas, que es exactamente como lo lee una
@@ -605,6 +631,13 @@ export const automationService = {
       .map(m => (m.text || '').trim())
       .filter(Boolean)
       .join('\n');
+
+    const tipoFinal = (ultimo.content_type && ultimo.content_type !== 'text')
+      ? ultimo.content_type
+      : (mensajeConMedia?.content_type || 'text');
+
+    const mediaUrlFinal = ultimo.media_url || mensajeConMedia?.media_url || null;
+    const metaMediaIdFinal = ultimo.meta_media_id || mensajeConMedia?.meta_media_id || null;
 
     const payload = {
       conversation_id: conversation.id,
@@ -617,10 +650,10 @@ export const automationService = {
       },
       message: {
         id: ultimo.id,
-        type: ultimo.content_type || 'text',
+        type: tipoFinal,
         text: textoJunto,
-        media_url: ultimo.media_url || null,
-        meta_media_id: ultimo.meta_media_id || null,
+        media_url: mediaUrlFinal,
+        meta_media_id: metaMediaIdFinal,
 
         // Identificador del botón que tocó, cuando en vez de escribir eligió
         // una opción. Es una respuesta exacta y sin ambigüedad, así que el
@@ -710,6 +743,24 @@ export const automationService = {
     } finally {
       clearTimeout(corte);
     }
+  },
+
+  /**
+   * Devuelve los segundos configurados para el debounce de mensajes.
+   */
+  async obtenerDebounceSegundos() {
+    const ms = await obtenerDebounceMs();
+    return Math.round(ms / 1000);
+  },
+
+  /**
+   * Actualiza el tiempo de debounce en segundos en la tabla de ajustes.
+   */
+  async actualizarDebounceSegundos(segundos, userId = null) {
+    const s = Math.max(1, Math.min(60, Math.round(Number(segundos) || DEBOUNCE_SEGUNDOS_POR_DEFECTO)));
+    await settingRepository.guardar(CLAVE_AJUSTE_DEBOUNCE, s, userId);
+    console.log(`⏱️ [AUTOMATION] Tiempo de espera (debounce) actualizado a ${s} segundos.`);
+    return s;
   }
 };
 
