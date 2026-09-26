@@ -16,11 +16,11 @@ import { precioParaPersona, registrarOfertaRecuperacion } from './precio.service
 export const CLAVE_AJUSTE_MENSAJES = 'mensajes_recuperacion';
 
 export const DEFAULT_MENSAJES_RECUPERACION = Object.freeze({
-  nivel_1_decidido: '¡Hola, {{nombre}}! 🤍\nTe escribo por las dudas: ¿tuviste algún inconveniente con la transferencia o necesitás ayuda con algún dato bancario?\nAvisame y te ayudo con gusto así tus peques ya pueden tener sus historias listas para colorear hoy mismo 🙌🏻✨',
-  nivel_1_mirando: '¡Hola, {{nombre}}! 🤍\n¿Te quedó alguna duda con {{producto}}? Si querés te muestro unas páginas por dentro o me preguntás lo que necesites, con total confianza 🙌🏻',
-  nivel_2_decidido: '¡Hola, {{nombre}}! 🤍\nSi lo que te frenó fue el monto, te lo puedo dejar en {{precio}}. ¿Te paso los datos así lo cerramos hoy mismo? 🙌🏻',
-  nivel_2_mirando: '¡Hola, {{nombre}}! 🤍\nTe hago una propuesta especial: {{producto}} te lo puedo dejar hoy en {{precio}}. Si te interesa, decime y te paso los datos 🙌🏻',
-  nivel_3: '¡Hola, {{nombre}}! No quiero insistir de más, así que te dejo esto simple:\n\nSi todavía querés {{producto}}, te lo dejo en {{precio}} y te paso los datos ahora mismo.\n\nY si no era para vos, todo bien igual. Acá quedo si algún día lo necesitás 🤍'
+  nivel_1_decidido: '¡Hola, {{nombre}}! 🤍\nQuería confirmar si te llegó bien la info de la cuenta o si te es más cómodo transferir por alias.\n\nApenas me pases la captura del comprobante te libero el archivo de inmediato para que tus peques ya puedan empezar a pintar hoy 🙌🏻✨',
+  nivel_1_mirando: '¡Hola, {{nombre}}! 🤍\nTe dejé apartado tu lugar para {{producto}}.\n\nMuchos papás lo están aprovechando esta semana para tener una actividad sana en casa y alejar a los chicos de las pantallas. ¿Te gustaría que te pase los datos para descargarlo hoy? 🙌🏻✨',
+  nivel_2_decidido: '¡Hola, {{nombre}}! 🤍\nPara darte una mano y que tus nenes no se queden sin sus historias, te activé una atención especial para que te lleves todo completo hoy por solo {{precio}}.\n\n¿Te paso los datos así aprovechás la promo antes de que venza? 📲✨',
+  nivel_2_mirando: '¡Hola, {{nombre}}! 🤍\nSe liberó una promo relámpago por hoy: podés llevarte {{producto}} completo a solo {{precio}}.\n\nTe quedan 50 láminas narradas con sus reflexiones y el diploma para imprimir cuando quieras. ¿Te paso la cuenta para activarlo? 🙌🏻',
+  nivel_3: '¡Hola, {{nombre}}! 🤍\nPaso a avisarte que hoy cierro los accesos pendientes para no molestarte más.\n\nSi todavía querés {{producto}}, te mantengo el precio promocional de {{precio}} durante el día de hoy. Solo respondeme con un "SÍ" y te paso los datos.\n\nSi decidís dejarlo para más adelante, no hay ningún problema. ¡Que Dios bendiga mucho a tu familia! 🙏🏻✨'
 });
 
 /**
