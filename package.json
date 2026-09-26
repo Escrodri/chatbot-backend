@@ -10,6 +10,7 @@
     "init-db": "node -e \"import('./src/database/index.js').then(m => m.initDatabase()).then(() => process.exit(0))\"",
     "test": "node --test",
     "set-admin-password": "node src/scripts/set-admin-password.js",
+    "actualizar-producto": "node src/scripts/actualizar-producto.js",
     "probar-cloudinary": "node src/scripts/probar-cloudinary.js"
   },
   "dependencies": {
