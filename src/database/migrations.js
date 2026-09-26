@@ -610,20 +610,15 @@ export async function initDatabase() {
 
     // 5. Sembrar o actualizar producto digital "Grandes Historias de la Biblia"
     try {
-      const nuevoResumen = `¡Qué alegría saludarte! 🤍✨
+      const nuevoResumen = `📦 Mirá todo lo que incluye el material:
 
-Sabemos lo difícil que es hoy despegar a los chicos de las pantallas del celular o jueguitos que no les dejan nada positivo.
-
-Por eso creamos "Grandes Historias de la Biblia", un material devocional interactivo diseñado para que aprendan valores de fe mientras pintan y se divierten en casa 🎨📖
-
-📦 Mirá todo lo que incluye el material:
 1️⃣ 10 Grandes Historias Bíblicas completas: narradas paso a paso en 50 partes.
-2️⃣ 50 Láminas para Colorear: trazos claros ideales para lápices, crayolas o témperas (3 a 10 años).
+2️⃣ 50 Láminas para Colorear: trazos claros ideales para lápices o crayolas (3 a 10 años).
 3️⃣ 50 Lecciones Bíblicas para el Corazón: perdón, obediencia, valentía y amor de Dios.
 4️⃣ 🏆 Diploma de "Pequeño Conocedor de la Biblia": listo para imprimir y premiar su dedicación.
 
 ✨ Ventaja única: Formato digital PDF, lo imprimís en casa o en librería las veces que quieras.
-🔥 Precio promocional hoy: Gs. 19.000 (pago único, acceso para siempre a tu WhatsApp)
+🔥 Precio promocional hoy: Gs. 19.000 (pago único, acceso para siempre directo a tu WhatsApp)
 
 ¿Cómo te gustaría continuar? Elegí una opción 👇`;
 
