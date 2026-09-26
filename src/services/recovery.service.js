@@ -2,6 +2,7 @@ import { orderRepository } from '../repositories/order.repository.js';
 import { conversationRepository } from '../repositories/conversation.repository.js';
 import { channelRepository } from '../repositories/channel.repository.js';
 import { messageRepository } from '../repositories/message.repository.js';
+import { settingRepository } from '../repositories/setting.repository.js';
 import { graphApiService } from './graph-api.service.js';
 import { socketManager } from '../sockets/index.js';
 import { timeUtil } from '../utils/time.util.js';
@@ -11,6 +12,16 @@ import {
   proximoHorarioParaEscribir
 } from '../config/env.config.js';
 import { precioParaPersona, registrarOfertaRecuperacion } from './precio.service.js';
+
+export const CLAVE_AJUSTE_MENSAJES = 'mensajes_recuperacion';
+
+export const DEFAULT_MENSAJES_RECUPERACION = Object.freeze({
+  nivel_1_decidido: '¡Hola, {{nombre}}! 🤍\nTe escribo por las dudas: ¿tuviste algún inconveniente con la transferencia o necesitás ayuda con algún dato bancario?\nAvisame y te ayudo con gusto así tus peques ya pueden tener sus historias listas para colorear hoy mismo 🙌🏻✨',
+  nivel_1_mirando: '¡Hola, {{nombre}}! 🤍\n¿Te quedó alguna duda con {{producto}}? Si querés te muestro unas páginas por dentro o me preguntás lo que necesites, con total confianza 🙌🏻',
+  nivel_2_decidido: '¡Hola, {{nombre}}! 🤍\nSi lo que te frenó fue el monto, te lo puedo dejar en {{precio}}. ¿Te paso los datos así lo cerramos hoy mismo? 🙌🏻',
+  nivel_2_mirando: '¡Hola, {{nombre}}! 🤍\nTe hago una propuesta especial: {{producto}} te lo puedo dejar hoy en {{precio}}. Si te interesa, decime y te paso los datos 🙌🏻',
+  nivel_3: '¡Hola, {{nombre}}! No quiero insistir de más, así que te dejo esto simple:\n\nSi todavía querés {{producto}}, te lo dejo en {{precio}} y te paso los datos ahora mismo.\n\nY si no era para vos, todo bien igual. Acá quedo si algún día lo necesitás 🤍'
+});
 
 /**
  * Recuperación de abandonos: volver a escribirle al que se quedó a mitad.
@@ -131,69 +142,98 @@ export const recoveryService = {
    * @param {number} nivel 1, 2 o 3
    * @returns {string}
    */
-  armarMensaje(candidato, nivel) {
-    return empezarEnMayuscula(this.redactar(candidato, nivel));
+  /**
+   * Obtiene los mensajes de recuperación vigentes (de la tabla ajustes o defaults).
+   */
+  async obtenerMensajesConfigurados() {
+    try {
+      const guardados = await settingRepository.leer(CLAVE_AJUSTE_MENSAJES, null);
+      return {
+        ...DEFAULT_MENSAJES_RECUPERACION,
+        ...(guardados || {})
+      };
+    } catch (err) {
+      console.warn('⚠️ [RECUPERACION] No se pudieron leer mensajes de ajustes:', err.message);
+      return { ...DEFAULT_MENSAJES_RECUPERACION };
+    }
   },
 
-  /** El texto crudo, antes de acomodar la primera letra. */
-  redactar(candidato, nivel) {
+  /**
+   * Guarda los mensajes de recuperación editados por el usuario.
+   */
+  async guardarMensajesConfigurados(mensajes, userId = null) {
+    const limpios = {
+      nivel_1_decidido: String(mensajes.nivel_1_decidido || '').trim() || DEFAULT_MENSAJES_RECUPERACION.nivel_1_decidido,
+      nivel_1_mirando: String(mensajes.nivel_1_mirando || '').trim() || DEFAULT_MENSAJES_RECUPERACION.nivel_1_mirando,
+      nivel_2_decidido: String(mensajes.nivel_2_decidido || '').trim() || DEFAULT_MENSAJES_RECUPERACION.nivel_2_decidido,
+      nivel_2_mirando: String(mensajes.nivel_2_mirando || '').trim() || DEFAULT_MENSAJES_RECUPERACION.nivel_2_mirando,
+      nivel_3: String(mensajes.nivel_3 || '').trim() || DEFAULT_MENSAJES_RECUPERACION.nivel_3
+    };
+    await settingRepository.guardar(CLAVE_AJUSTE_MENSAJES, limpios, userId);
+    return limpios;
+  },
+
+  /**
+   * Restablece los mensajes a sus valores originales por defecto.
+   */
+  async restablecerMensajes(userId = null) {
+    await settingRepository.guardar(CLAVE_AJUSTE_MENSAJES, { ...DEFAULT_MENSAJES_RECUPERACION }, userId);
+    return { ...DEFAULT_MENSAJES_RECUPERACION };
+  },
+
+  /**
+   * Arma el texto del seguimiento usando la plantilla configurada e interpolando variables.
+   *
+   * @param {object} candidato Fila de `paraRecuperar`
+   * @param {number} nivel 1, 2 o 3
+   * @returns {Promise<string>}
+   */
+  async armarMensaje(candidato, nivel) {
+    const crudo = await this.redactar(candidato, nivel);
+    return empezarEnMayuscula(crudo);
+  },
+
+  /** El texto procesado con variables. */
+  async redactar(candidato, nivel) {
     const nombre = primerNombre(candidato);
-    const coma = nombre ? `${nombre}, ` : '';
     const producto = candidato.product_name || 'el material';
     const moneda = candidato.product_currency || candidato.currency || 'PYG';
 
     const rebajado = this.descuentoPara(candidato);
-    const hayDescuento = rebajado > 0;
+    const precio = rebajado > 0
+      ? formatearMonto(rebajado, moneda)
+      : (candidato.precio_vigente ? formatearMonto(candidato.precio_vigente, moneda) : '');
 
     const cual = segmento(candidato.etapa);
+    const cfg = await this.obtenerMensajesConfigurados();
 
+    let plantilla = '';
     if (nivel === 1) {
-      return cual === 'decidido'
-        ? variar([
-            `${coma}te escribo por si se te complicó algo con la transferencia. ¿Querés que te pase de nuevo los datos?`,
-            `${coma}¿pudiste hacer la transferencia? Si quedó a medias o se te fue de la cabeza, decime y te paso los datos otra vez.`,
-            `${coma}quedó ahí el pago y no quiero que te quedes sin el material. ¿Te paso de nuevo los datos?`
-          ])
-        : variar([
-            `${coma}¿te quedó alguna duda con ${producto}? Preguntame lo que quieras, con confianza.`,
-            `${coma}¿qué te pareció? Si querés te cuento algo más o te muestro un par de páginas antes de decidir.`,
-            `${coma}¿alcanzaste a verlo? Cualquier cosa que quieras saber, preguntame nomás.`
-          ]);
+      plantilla = cual === 'decidido' ? cfg.nivel_1_decidido : cfg.nivel_1_mirando;
+    } else if (nivel === 2) {
+      plantilla = cual === 'decidido' ? cfg.nivel_2_decidido : cfg.nivel_2_mirando;
+    } else {
+      plantilla = cfg.nivel_3;
     }
 
-    if (nivel === 2) {
-      if (!hayDescuento) {
-        return cual === 'decidido'
-          ? `${coma}te dejo el mensaje por si todavía lo querés. Los datos para transferir los tengo acá, decime nomás y te los paso.`
-          : `${coma}¿seguís con ganas de ${producto}? Si hay algo que te frena, contame y lo vemos.`;
-      }
+    let texto = plantilla
+      .replace(/\{\{\s*nombre\s*\}\}/gi, nombre || '')
+      .replace(/\[\s*nombre\s*\]/gi, nombre || '')
+      .replace(/\{\{\s*producto\s*\}\}/gi, producto)
+      .replace(/\{\{\s*precio\s*\}\}/gi, precio)
+      .replace(/\{\{\s*moneda\s*\}\}/gi, moneda);
 
-      const precio = formatearMonto(rebajado, moneda);
-      return cual === 'decidido'
-        ? variar([
-            `${coma}si lo que te frenó fue el monto, te lo puedo dejar en ${precio}. ¿Te paso los datos así lo cerramos?`,
-            `${coma}hagamos una cosa: te lo dejo en ${precio} y listo. ¿Querés que te pase los datos?`
-          ])
-        : variar([
-            `${coma}te hago una mejor: ${producto} te lo puedo dejar en ${precio}. Si te interesa, decime y te paso los datos.`,
-            `${coma}pensé en escribirte con algo concreto: te lo dejo en ${precio}. ¿Lo querés?`
-          ]);
+    // Si no había nombre de persona, limpiar saludos residuales como "¡Hola, !" -> "¡Hola!"
+    if (!nombre) {
+      texto = texto
+        .replace(/¡Hola,\s*!/gi, '¡Hola!')
+        .replace(/Hola,\s*!/gi, 'Hola!')
+        .replace(/,\s*,/g, ',')
+        .replace(/^[,\s]+/g, '')
+        .replace(/\s{2,}/g, ' ');
     }
 
-    // Nivel 3. Es el último y se dice que es el último: quien no quiere
-    // comprar necesita saber que lo dejamos en paz, y quien sí quiere necesita
-    // saber que esta es la vez.
-    const precio = hayDescuento ? formatearMonto(rebajado, moneda) : null;
-
-    return [
-      `${coma}esta es la última vez que te escribo por esto, para no estar molestando.`,
-      '',
-      precio
-        ? `Si todavía querés ${producto}, te lo dejo en ${precio} y te paso los datos ahora mismo.`
-        : `Si todavía querés ${producto}, decime y te paso los datos ahora mismo.`,
-      '',
-      'Y si no era para vos, todo bien igual. Acá quedo si algún día lo necesitás.'
-    ].join('\n');
+    return texto.trim();
   },
 
   /**
@@ -439,7 +479,7 @@ export const recoveryService = {
           // Sin el precio vigente se compara contra el de lista, como antes.
         }
 
-        const texto = this.armarMensaje(candidato, nivel);
+        const texto = await this.armarMensaje(candidato, nivel);
 
         // Se anota ANTES de mandar, no después. Si Meta acepta el mensaje y
         // después se corta la conexión con la base, anotar al final significa

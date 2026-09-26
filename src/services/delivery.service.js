@@ -79,22 +79,23 @@ export const deliveryService = {
   armarMensajeEntrega(pedido) {
     const nombre = primerNombre(pedido);
     const partes = [
-      nombre ? `Listo ${nombre}, ya te confirmamos el pago.` : 'Listo, ya te confirmamos el pago.',
-      'Acá tenés tu material:',
+      nombre ? `¡Comprobante recibido con éxito, muchísimas gracias, ${nombre}! 🙏🏻🤍` : '¡Comprobante recibido con éxito, muchísimas gracias! 🙏🏻🤍',
+      'Acá tenés tu material completo:',
       '',
-      `*${pedido.product_name || 'Tu compra'}*`,
+      `📄 *${pedido.product_name || 'Grandes Historias de la Biblia'}*`,
       pedido.delivery_url
     ];
 
-    if (pedido.delivery_note) partes.push('', pedido.delivery_note);
-
-    partes.push(
-      '',
-      'Es tuyo para siempre: podés descargarlo y volver a entrar las veces que quieras.',
-      'Si tenés algún problema para abrirlo, escribime por acá nomás y lo vemos juntos.',
-      '',
-      'Gracias por la compra, que lo disfruten.'
-    );
+    if (pedido.delivery_note) {
+      partes.push('', pedido.delivery_note);
+    } else {
+      partes.push(
+        '',
+        '💡 Consejo: Podés ir imprimiendo una historia por semana (son 5 páginas por relato). Así tienen una actividad constante y al finalizar completan juntos el diploma de la última página.',
+        '',
+        '¡Que sea de gran bendición para tu hogar y disfruten mucho! ✨'
+      );
+    }
 
     return partes.join('\n');
   },

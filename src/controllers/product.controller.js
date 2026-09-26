@@ -90,7 +90,7 @@ export const productController = {
         // La versión corta para la tarjeta de WhatsApp. Si está vacía se cae a
         // la descripción larga recortada, que es peor pero no deja el mensaje
         // sin contenido mientras nadie escribió el resumen todavía.
-        resumen: (p.resumen && p.resumen.trim()) || String(p.description || '').slice(0, 220),
+        resumen: (p.resumen && p.resumen.trim()) || String(p.description || '').slice(0, 1024),
 
         price: Number(p.price),
         price_formatted: formatearMonto(p.price, p.currency),

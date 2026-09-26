@@ -27,6 +27,11 @@ settingsRouter.post('/channels/instagram-lookup', settingsController.instagramLo
 settingsRouter.get('/bot', settingsController.getBotSettings);
 settingsRouter.post('/bot', settingsController.saveBotSettings);
 
+// Mensajes de Remarketing / Recuperación
+settingsRouter.get('/recovery-messages', settingsController.getRecoveryMessages);
+settingsRouter.put('/recovery-messages', settingsController.saveRecoveryMessages);
+settingsRouter.post('/recovery-messages/reset', settingsController.resetRecoveryMessages);
+
 // Usuarios / Operadores
 settingsRouter.get('/users', settingsController.getUsers);
 settingsRouter.post('/users', settingsController.createUser);

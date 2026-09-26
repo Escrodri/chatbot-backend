@@ -5,6 +5,7 @@ import { userRepository } from '../repositories/user.repository.js';
 import { logRepository } from '../repositories/log.repository.js';
 import { teamRepository } from '../repositories/team.repository.js';
 import envConfig from '../config/env.config.js';
+import { recoveryService } from '../services/recovery.service.js';
 
 export const settingsController = {
   // ==========================================
@@ -1043,6 +1044,50 @@ export const settingsController = {
       });
     } catch (err) {
       return res.status(500).json({ error: 'Error al consultar Instagram en Meta Graph API: ' + err.message });
+    }
+  },
+
+  // ==========================================
+  // MENSAJES DE REMARKETING / RECUPERACIÓN
+  // ==========================================
+
+  /**
+   * Obtiene los mensajes de remarketing / recuperación configurados.
+   */
+  async getRecoveryMessages(req, res) {
+    try {
+      const messages = await recoveryService.obtenerMensajesConfigurados();
+      return res.json({ messages });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al obtener mensajes de remarketing: ' + error.message });
+    }
+  },
+
+  /**
+   * Guarda los mensajes de remarketing / recuperación editados.
+   */
+  async saveRecoveryMessages(req, res) {
+    try {
+      const { messages } = req.body || {};
+      if (!messages || typeof messages !== 'object') {
+        return res.status(400).json({ error: 'Formato de mensajes inválido' });
+      }
+      const saved = await recoveryService.guardarMensajesConfigurados(messages, req.user?.id);
+      return res.json({ ok: true, messages: saved });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al guardar mensajes de remarketing: ' + error.message });
+    }
+  },
+
+  /**
+   * Restablece los mensajes de remarketing / recuperación a sus valores por defecto.
+   */
+  async resetRecoveryMessages(req, res) {
+    try {
+      const reset = await recoveryService.restablecerMensajes(req.user?.id);
+      return res.json({ ok: true, messages: reset });
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al restablecer mensajes de remarketing: ' + error.message });
     }
   }
 };
