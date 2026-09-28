@@ -11,11 +11,45 @@ import {
   enHorarioDeSilencio,
   proximoHorarioParaEscribir
 } from '../config/env.config.js';
-import { precioParaPersona, registrarOfertaRecuperacion } from './precio.service.js';
+import { precioParaPersona, registrarOfertaRecuperacion, fechaParaguay } from './precio.service.js';
 
 export const CLAVE_AJUSTE_MENSAJES = 'mensajes_recuperacion';
 
+/**
+ * Textos por defecto del seguimiento.
+ *
+ * Tres reglas para cualquier texto que se cargue acá o desde el panel: un PDF
+ * no tiene cupos ni lugares apartados, una oferta vence cuando dice {{vence}}
+ * y no "hoy", y "promo" solo se dice cuando de verdad hay un precio más bajo.
+ * Las versiones "sin descuento" existen para eso: cuando el producto no tiene
+ * precio de recuperación, o la persona ya lo tiene, el mensaje no puede
+ * presentar el precio de siempre como si fuera una rebaja.
+ *
+ * Son neutros a propósito (sin "pintar", sin "Dios bendiga"): valen para
+ * cualquier producto hasta que cada proyecto tenga los suyos (MP-08).
+ */
 export const DEFAULT_MENSAJES_RECUPERACION = Object.freeze({
+  nivel_1_decidido: '¡Hola, {{nombre}}! 🤍\nTe escribo por si se complicó algo con la transferencia. ¿Querés que te pase de nuevo los datos?\n\nApenas me mandes la captura del comprobante, te llega {{producto}} por este mismo chat 🙌🏻',
+  nivel_1_mirando: '¡Hola, {{nombre}}! 🤍\n¿Pudiste ver bien {{producto}}? Si te quedó alguna duda, preguntame lo que quieras.\n\nY si ya lo querés, decime y te paso los datos 🙌🏻',
+  nivel_2_decidido: '¡Hola, {{nombre}}! 🤍\nSi lo que te frenó fue el monto, te lo puedo dejar en {{precio}}. Ese precio te lo mantengo hasta el {{vence}}.\n\n¿Te paso los datos? 📲',
+  nivel_2_mirando: '¡Hola, {{nombre}}! 🤍\nTe quería hacer una propuesta: {{producto}} te lo dejo en {{precio}}, y ese precio te lo mantengo hasta el {{vence}}.\n\n¿Te interesa? Decime y te paso los datos 🙌🏻',
+  nivel_2_sin_descuento: '¡Hola, {{nombre}}! 🤍\n¿Seguís con ganas de {{producto}}? Si hay algo que te frena, contame y lo vemos.\n\nSi ya lo querés, decime y te paso los datos 🙌🏻',
+  nivel_3: '¡Hola, {{nombre}}! 🤍\nNo quiero insistir de más, así que te dejo esto simple: si todavía querés {{producto}}, te lo dejo en {{precio}} hasta el {{vence}} y te paso los datos ahora mismo.\n\nY si no era para vos, todo bien igual. Acá quedo si algún día lo necesitás.',
+  nivel_3_sin_descuento: '¡Hola, {{nombre}}! 🤍\nNo quiero insistir de más, así que te dejo esto simple: si todavía querés {{producto}} a {{precio}}, decime y te paso los datos ahora mismo.\n\nY si no era para vos, todo bien igual. Acá quedo si algún día lo necesitás.'
+});
+
+export const CLAVES_MENSAJES = Object.freeze(Object.keys(DEFAULT_MENSAJES_RECUPERACION));
+
+/**
+ * Los textos por defecto que hubo el 26/09, antes de este arreglo.
+ *
+ * Si alguien tocó "Restablecer" o guardó sin cambiar nada, esos textos quedaron
+ * copiados en la base, y cambiar los de arriba no alcanzaría: se seguirían
+ * mandando los viejos, que prometían lugares apartados y promos "por hoy".
+ * Solo se ignora un valor guardado cuando es idéntico a uno de estos; lo que
+ * alguien escribió a mano se respeta.
+ */
+const DEFAULTS_ANTERIORES = Object.freeze({
   nivel_1_decidido: '¡Hola, {{nombre}}! 🤍\nQuería confirmar si te llegó bien la info de la cuenta o si te es más cómodo transferir por alias.\n\nApenas me pases la captura del comprobante te libero el archivo de inmediato para que tus peques ya puedan empezar a pintar hoy 🙌🏻✨',
   nivel_1_mirando: '¡Hola, {{nombre}}! 🤍\nTe dejé apartado tu lugar para {{producto}}.\n\nMuchos papás lo están aprovechando esta semana para tener una actividad sana en casa y alejar a los chicos de las pantallas. ¿Te gustaría que te pase los datos para descargarlo hoy? 🙌🏻✨',
   nivel_2_decidido: '¡Hola, {{nombre}}! 🤍\nPara darte una mano y que tus nenes no se queden sin sus historias, te activé una atención especial para que te lleves todo completo hoy por solo {{precio}}.\n\n¿Te paso los datos así aprovechás la promo antes de que venza? 📲✨',
@@ -146,29 +180,30 @@ export const recoveryService = {
    * Obtiene los mensajes de recuperación vigentes (de la tabla ajustes o defaults).
    */
   async obtenerMensajesConfigurados() {
+    let guardados = null;
     try {
-      const guardados = await settingRepository.leer(CLAVE_AJUSTE_MENSAJES, null);
-      return {
-        ...DEFAULT_MENSAJES_RECUPERACION,
-        ...(guardados || {})
-      };
+      guardados = await settingRepository.leer(CLAVE_AJUSTE_MENSAJES, null);
     } catch (err) {
       console.warn('⚠️ [RECUPERACION] No se pudieron leer mensajes de ajustes:', err.message);
-      return { ...DEFAULT_MENSAJES_RECUPERACION };
     }
+
+    const salida = {};
+    for (const clave of CLAVES_MENSAJES) {
+      const valor = typeof guardados?.[clave] === 'string' ? guardados[clave].trim() : '';
+      const esDefaultViejo = Boolean(valor) && valor === DEFAULTS_ANTERIORES[clave];
+      salida[clave] = valor && !esDefaultViejo ? valor : DEFAULT_MENSAJES_RECUPERACION[clave];
+    }
+    return salida;
   },
 
   /**
    * Guarda los mensajes de recuperación editados por el usuario.
    */
   async guardarMensajesConfigurados(mensajes, userId = null) {
-    const limpios = {
-      nivel_1_decidido: String(mensajes.nivel_1_decidido || '').trim() || DEFAULT_MENSAJES_RECUPERACION.nivel_1_decidido,
-      nivel_1_mirando: String(mensajes.nivel_1_mirando || '').trim() || DEFAULT_MENSAJES_RECUPERACION.nivel_1_mirando,
-      nivel_2_decidido: String(mensajes.nivel_2_decidido || '').trim() || DEFAULT_MENSAJES_RECUPERACION.nivel_2_decidido,
-      nivel_2_mirando: String(mensajes.nivel_2_mirando || '').trim() || DEFAULT_MENSAJES_RECUPERACION.nivel_2_mirando,
-      nivel_3: String(mensajes.nivel_3 || '').trim() || DEFAULT_MENSAJES_RECUPERACION.nivel_3
-    };
+    const limpios = {};
+    for (const clave of CLAVES_MENSAJES) {
+      limpios[clave] = String(mensajes?.[clave] || '').trim() || DEFAULT_MENSAJES_RECUPERACION[clave];
+    }
     await settingRepository.guardar(CLAVE_AJUSTE_MENSAJES, limpios, userId);
     return limpios;
   },
@@ -199,10 +234,20 @@ export const recoveryService = {
     const producto = candidato.product_name || 'el material';
     const moneda = candidato.product_currency || candidato.currency || 'PYG';
 
-    const rebajado = this.descuentoPara(candidato);
-    const precio = rebajado > 0
+    // Mismo criterio que usa `pasada` para anotar la oferta después de
+    // mandar: si acá se dice "te lo dejo en 15.000", allá queda guardado.
+    const rebajado = nivel >= 2 ? this.descuentoPara(candidato) : 0;
+    const conDescuento = rebajado > 0;
+
+    const vigente = Number(candidato.precio_vigente || candidato.product_price || candidato.amount) || 0;
+    const precio = conDescuento
       ? formatearMonto(rebajado, moneda)
-      : (candidato.precio_vigente ? formatearMonto(candidato.precio_vigente, moneda) : '');
+      : (vigente ? formatearMonto(vigente, moneda) : '');
+
+    // La fecha que se le anuncia es la misma que `registrarOfertaRecuperacion`
+    // guarda como vencimiento. La gracia silenciosa no se promete.
+    const horas = Number(envConfig.ofertas?.recuperacionHoras ?? 72);
+    const vence = conDescuento ? fechaParaguay(Date.now() + horas * 3600000) : '';
 
     const cual = segmento(candidato.etapa);
     const cfg = await this.obtenerMensajesConfigurados();
@@ -211,16 +256,19 @@ export const recoveryService = {
     if (nivel === 1) {
       plantilla = cual === 'decidido' ? cfg.nivel_1_decidido : cfg.nivel_1_mirando;
     } else if (nivel === 2) {
-      plantilla = cual === 'decidido' ? cfg.nivel_2_decidido : cfg.nivel_2_mirando;
+      plantilla = !conDescuento
+        ? cfg.nivel_2_sin_descuento
+        : (cual === 'decidido' ? cfg.nivel_2_decidido : cfg.nivel_2_mirando);
     } else {
-      plantilla = cfg.nivel_3;
+      plantilla = conDescuento ? cfg.nivel_3 : cfg.nivel_3_sin_descuento;
     }
 
-    let texto = plantilla
+    let texto = String(plantilla || '')
       .replace(/\{\{\s*nombre\s*\}\}/gi, nombre || '')
       .replace(/\[\s*nombre\s*\]/gi, nombre || '')
       .replace(/\{\{\s*producto\s*\}\}/gi, producto)
       .replace(/\{\{\s*precio\s*\}\}/gi, precio)
+      .replace(/\{\{\s*vence\s*\}\}/gi, vence)
       .replace(/\{\{\s*moneda\s*\}\}/gi, moneda);
 
     // Si no había nombre de persona, limpiar saludos residuales como "¡Hola, !" -> "¡Hola!"
@@ -229,8 +277,10 @@ export const recoveryService = {
         .replace(/¡Hola,\s*!/gi, '¡Hola!')
         .replace(/Hola,\s*!/gi, 'Hola!')
         .replace(/,\s*,/g, ',')
-        .replace(/^[,\s]+/g, '')
-        .replace(/\s{2,}/g, ' ');
+        .replace(/^[,\s]+/, '')
+        // Solo espacios y tabulaciones: con \s también se comía los saltos
+        // de línea y el mensaje llegaba como un único párrafo.
+        .replace(/[ \t]{2,}/g, ' ');
     }
 
     return texto.trim();

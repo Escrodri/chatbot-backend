@@ -411,6 +411,12 @@ export const conversationRepository = {
        eti AS (
          DELETE FROM conversation_tags WHERE conversation_id = $1 RETURNING 1
        ),
+       -- Las ofertas cuelgan de la conversación, no del pedido: si quedan, el
+       -- descuento del seguimiento o de una campaña sobrevive al reinicio y la
+       -- prueba vuelve a cotizar el precio rebajado en vez del de lista.
+       ofe AS (
+         DELETE FROM ofertas WHERE conversation_id = $1 RETURNING 1
+       ),
        conv AS (
          UPDATE conversations
          SET last_message_text = NULL,
@@ -429,11 +435,12 @@ export const conversationRepository = {
        SELECT (SELECT COUNT(*) FROM msg)::int AS mensajes,
               (SELECT COUNT(*) FROM ord)::int AS pedidos,
               (SELECT COUNT(*) FROM eve)::int AS eventos,
-              (SELECT COUNT(*) FROM eti)::int AS etiquetas`,
+              (SELECT COUNT(*) FROM eti)::int AS etiquetas,
+              (SELECT COUNT(*) FROM ofe)::int AS ofertas`,
       [conversationId]
     );
 
-    return rows[0] || { mensajes: 0, pedidos: 0, eventos: 0, etiquetas: 0 };
+    return rows[0] || { mensajes: 0, pedidos: 0, eventos: 0, etiquetas: 0, ofertas: 0 };
   }
 };
 

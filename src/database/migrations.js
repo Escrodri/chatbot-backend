@@ -608,71 +608,14 @@ export async function initDatabase() {
       }
     }
 
-    // 5. Sembrar o actualizar producto digital "Grandes Historias de la Biblia"
-    try {
-      const nuevoResumen = `📦 Mirá todo lo que incluye el material:
-
-1️⃣ 10 Grandes Historias Bíblicas completas: Desde La Creación del Mundo y El Arca de Noé hasta El Nacimiento de Jesús y La Resurrección, narradas paso a paso en 50 partes.
-2️⃣ 50 Láminas para Colorear: Dibujos hermosos con trazos claros ideales para lápices, crayolas o témperas (de 3 a 10 años).
-3️⃣ 50 Lecciones Bíblicas para el Corazón: Cada página trae una reflexión diaria para conversar en familia sobre el perdón, la obediencia, la valentía y el amor de Dios.
-4️⃣ 🏆 Diploma de "Pequeño Conocedor de la Biblia": Certificado al final del libro listo para imprimir y premiar su dedicación cuando complete las historias.
-
-✨ Ventaja única: Al ser en formato digital PDF, lo guardás en tu celular y lo imprimís en casa o en una librería las veces que quieras (ideal si tenés más de un niño o para volver a pintar).
-
-🔥 Precio promocional hoy: Gs. 19.000 (pago único, acceso para siempre directo a tu WhatsApp)
-
-¿Cómo te gustaría continuar? Elegí una opción 👇
-1️⃣ Ver páginas por dentro 🖼️
-2️⃣ Lo quiero ya 📲`;
-
-      const deliveryNote = `Recomendación: Impriman una historia por semana para hacer juntos el devocional familiar. ¡Que sea de gran bendición para tu hogar! ✨`;
-
-      const { rows: existingProducts } = await client.query(
-        `SELECT id FROM products 
-         WHERE slug = 'grandes-historias-de-la-biblia' 
-            OR name ILIKE '%Grandes Historias%' 
-            OR resumen ILIKE '%Grandes Historias%'
-            OR description ILIKE '%Grandes Historias%'
-         LIMIT 1`
-      );
-
-      let targetProductId = existingProducts[0]?.id;
-      if (!targetProductId) {
-        const { rows: allProds } = await client.query('SELECT id FROM products LIMIT 2');
-        if (allProds.length === 1) {
-          targetProductId = allProds[0].id;
-        }
-      }
-
-      if (targetProductId) {
-        await client.query(
-          `UPDATE products
-           SET resumen = $1,
-               price = 19000,
-               currency = 'PYG',
-               precio_recuperacion = 15000,
-               delivery_note = COALESCE(delivery_note, $2),
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = $3`,
-          [nuevoResumen, deliveryNote, targetProductId]
-        );
-        console.log(`✅ [DATABASE] Producto "Grandes Historias de la Biblia" (#${targetProductId}) actualizado con nuevo resumen.`);
-      } else {
-        await client.query(
-          `INSERT INTO products (team_id, slug, name, description, resumen, price, currency, precio_recuperacion, delivery_note, is_active, sort_order)
-           VALUES ($1, 'grandes-historias-de-la-biblia', 'Grandes Historias de la Biblia — Libro para Colorear (PDF)', $2, $3, 19000, 'PYG', 15000, $4, TRUE, 1)`,
-          [
-            defaultTeamId,
-            'Material educativo y devocional cristiano para niños de 3 a 10 años en formato digital PDF listo para imprimir en casa o librería.',
-            nuevoResumen,
-            deliveryNote
-          ]
-        );
-        console.log('🌱 [DATABASE] Producto "Grandes Historias de la Biblia" sembrado exitosamente.');
-      }
-    } catch (prodErr) {
-      console.warn('⚠️ [DATABASE] Nota sobre actualización de producto inicial:', prodErr.message);
-    }
+    // Los productos no se siembran ni se actualizan desde acá.
+    //
+    // Hasta el 26/09 este archivo reescribía el libro de la Biblia en cada
+    // arranque: resumen, precio y precio de recuperación. Lo que se cambiaba
+    // en el panel se perdía con el próximo despliegue, y si la base tenía un
+    // único producto que no era ese, lo pisaba igual. El catálogo es de la
+    // base y se edita desde Productos; el código no opina sobre qué se vende
+    // ni a cuánto.
   } catch (error) {
     console.error('❌ [DATABASE ERROR] Error al inicializar esquema PostgreSQL:', error.message);
     throw error;
