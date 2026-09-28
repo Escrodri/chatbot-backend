@@ -126,6 +126,7 @@ export const orderRepository = {
       // entregar, y sin esto lo estaban haciendo a ciegas.
       `SELECT o.*, p.name AS product_name, p.slug AS product_slug,
               p.price, p.precio_recuperacion, p.delivery_url, p.delivery_note,
+              p.mensajes AS product_mensajes,
               c.channel_id, ${conEquipos ? 'ch.team_id' : 'NULL::int AS team_id'}
        FROM orders o
        LEFT JOIN products p ON o.product_id = p.id

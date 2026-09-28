@@ -33,7 +33,7 @@ export const productRepository = {
 
     const { rows } = await query(
       `SELECT id, team_id, slug, name, description, resumen, price, currency,
-              precio_recuperacion, preview_urls,
+              precio_recuperacion, preview_urls, mensajes,
               delivery_url, delivery_note, cover_url, is_active, sort_order,
               created_at, updated_at
        FROM products
@@ -69,18 +69,19 @@ export const productRepository = {
     isActive = true,
     sortOrder = 0,
     precioRecuperacion = null,
-    previewUrls = null
+    previewUrls = null,
+    mensajes = {}
   }) {
     const { rows } = await query(
       `INSERT INTO products
          (team_id, slug, name, description, resumen, price, currency,
           delivery_url, delivery_note, cover_url, is_active, sort_order,
-          precio_recuperacion, preview_urls)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          precio_recuperacion, preview_urls, mensajes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
        RETURNING *`,
       [teamId, slug, name, description, resumen, price, currency,
        deliveryUrl, deliveryNote, coverUrl, isActive, sortOrder,
-       precioRecuperacion, previewUrls]
+       precioRecuperacion, previewUrls, JSON.stringify(mensajes || {})]
     );
     return rows[0];
   },
@@ -103,7 +104,8 @@ export const productRepository = {
       isActive: 'is_active',
       sortOrder: 'sort_order',
       precioRecuperacion: 'precio_recuperacion',
-      previewUrls: 'preview_urls'
+      previewUrls: 'preview_urls',
+      mensajes: 'mensajes'
     };
 
     const sets = [];
@@ -111,8 +113,11 @@ export const productRepository = {
 
     for (const [clave, columna] of Object.entries(permitidos)) {
       if (cambios[clave] !== undefined) {
-        params.push(cambios[clave]);
-        sets.push(`${columna} = $${params.length}`);
+        // JSONB va como texto y se castea: si se pasara el objeto tal cual, pg
+        // convertiría los arreglos de adentro al formato de arreglo de Postgres.
+        const esJson = columna === 'mensajes';
+        params.push(esJson ? JSON.stringify(cambios[clave] || {}) : cambios[clave]);
+        sets.push(`${columna} = $${params.length}${esJson ? '::jsonb' : ''}`);
       }
     }
 

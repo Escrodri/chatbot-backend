@@ -124,6 +124,11 @@ export async function initDatabase() {
       // Dos textos porque son dos trabajos distintos, no porque uno esté mal.
       'ALTER TABLE products ADD COLUMN IF NOT EXISTS resumen TEXT',
 
+      // Lo que el bot le dice al cliente sobre cada producto (presentación,
+      // muestras, botones, entrega). Se carga en el panel; ver
+      // services/mensajes-producto.service.js.
+      "ALTER TABLE products ADD COLUMN IF NOT EXISTS mensajes JSONB NOT NULL DEFAULT '{}'::jsonb",
+
       // Un número de operación no puede cobrar dos pedidos. Se lo prohíbe la
       // base y no el código.
       //
@@ -610,8 +615,8 @@ export async function initDatabase() {
 
     // Los productos no se siembran ni se actualizan desde acá.
     //
-    // Hasta el 26/09 este archivo reescribía el libro de la Biblia en cada
-    // arranque: resumen, precio y precio de recuperación. Lo que se cambiaba
+    // Hasta el 26/09 este archivo reescribía un producto en cada arranque:
+    // resumen, precio y precio de recuperación. Lo que se cambiaba
     // en el panel se perdía con el próximo despliegue, y si la base tenía un
     // único producto que no era ese, lo pisaba igual. El catálogo es de la
     // base y se edita desde Productos; el código no opina sobre qué se vende

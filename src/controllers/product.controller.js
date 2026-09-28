@@ -1,5 +1,6 @@
 import { productRepository } from '../repositories/product.repository.js';
 import { mediaService } from '../services/media.service.js';
+import { normalizarMensajes } from '../services/mensajes-producto.service.js';
 import { config } from '../config/index.js';
 
 /** Formatea un monto con separadores locales (Gs. 35.000). */
@@ -114,6 +115,9 @@ export const productController = {
         // para que el flujo no tenga que saber cómo están guardadas.
         preview_urls: separarLineas(p.preview_urls),
 
+        // Lo que el bot dice sobre este producto, tal como se cargó en el panel.
+        mensajes: normalizarMensajes(p.mensajes).mensajes,
+
         ...(esAdmin ? {
           delivery_url: p.delivery_url || '',
           delivery_note: p.delivery_note || ''
@@ -227,7 +231,7 @@ export const productController = {
     try {
       const { slug, name, description, resumen, price, currency, delivery_url,
               delivery_note, cover_url, is_active, sort_order,
-              precio_recuperacion, preview_urls } = req.body || {};
+              precio_recuperacion, preview_urls, mensajes } = req.body || {};
 
       if (!slug || !name) {
         return res.status(400).json({ error: 'El producto necesita al menos slug y nombre' });
@@ -236,6 +240,11 @@ export const productController = {
       const monto = Number(price);
       if (!Number.isFinite(monto) || monto < 0) {
         return res.status(400).json({ error: 'El precio no es un número válido' });
+      }
+
+      const revisados = normalizarMensajes(mensajes);
+      if (revisados.errores.length) {
+        return res.status(400).json({ error: revisados.errores.join(' ') });
       }
 
       if (await productRepository.findBySlug(slug)) {
@@ -259,7 +268,8 @@ export const productController = {
         // recuperación". Guardar un cero haría que el bot ofrezca el material
         // gratis, así que se trata igual que si no estuviera.
         precioRecuperacion: Number(precio_recuperacion) > 0 ? Number(precio_recuperacion) : null,
-        previewUrls: separarLineas(preview_urls).join('\n') || null
+        previewUrls: separarLineas(preview_urls).join('\n') || null,
+        mensajes: revisados.mensajes
       });
 
       return res.status(201).json(creado);
@@ -303,6 +313,14 @@ export const productController = {
 
       if (b.preview_urls !== undefined) {
         cambios.previewUrls = separarLineas(b.preview_urls).join('\n') || null;
+      }
+
+      if (b.mensajes !== undefined) {
+        const revisados = normalizarMensajes(b.mensajes);
+        if (revisados.errores.length) {
+          return res.status(400).json({ error: revisados.errores.join(' ') });
+        }
+        cambios.mensajes = revisados.mensajes;
       }
 
       if (b.price !== undefined) {

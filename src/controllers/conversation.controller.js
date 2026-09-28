@@ -12,6 +12,7 @@ import { conversionRepository } from '../repositories/conversion.repository.js';
 import { automationService } from '../services/automation.service.js';
 import { deliveryService } from '../services/delivery.service.js';
 import { esTelefonoDePrueba } from '../config/env.config.js';
+import { mensajesProductoService } from '../services/mensajes-producto.service.js';
 
 export const conversationController = {
   /**
@@ -230,6 +231,39 @@ export const conversationController = {
       });
     } catch (error) {
       return res.status(500).json({ error: 'Error al obtener mensajes: ' + error.message });
+    }
+  },
+
+  /**
+   * Manda un paso del guion de un producto con los textos cargados en el panel.
+   *
+   * Lo llama n8n en vez de tener el texto adentro de sus nodos: la
+   * presentación y las muestras de cada producto salen de `products.mensajes`,
+   * así que un producto nuevo no obliga a tocar el flujo.
+   *
+   * POST /api/conversations/:id/paso   { paso: 'presentacion' | 'muestras', product_id }
+   */
+  async enviarPaso(req, res) {
+    try {
+      const conversationId = parseInt(req.params.id, 10);
+      const productId = parseInt(req.body?.product_id, 10);
+      const paso = String(req.body?.paso || '').trim();
+
+      if (isNaN(conversationId)) return res.status(400).json({ error: 'ID de conversación inválido' });
+      if (isNaN(productId)) return res.status(400).json({ error: 'Falta product_id' });
+
+      if (req.user?.role === 'agent') {
+        const conv = await conversationRepository.findById(conversationId);
+        const assigned = await userRepository.getAssignedChannelIds(req.user.id);
+        if (conv && assigned.length > 0 && !assigned.includes(conv.channel_id)) {
+          return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+        }
+      }
+
+      const { status, cuerpo } = await mensajesProductoService.enviarPaso({ conversationId, paso, productId });
+      return res.status(status).json(cuerpo);
+    } catch (error) {
+      return res.status(500).json({ error: 'Error al mandar el paso: ' + error.message });
     }
   },
 

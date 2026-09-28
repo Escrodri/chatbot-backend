@@ -43,6 +43,10 @@ conversationRouter.post('/:id/verificar', requireAuthOrService, conversationCont
 // con cada mensaje: con varios productos, un "bueno" o una foto no lo dicen.
 conversationRouter.post('/:id/producto', requireAuthOrService, productoFocoController.resolver);
 
+// Presentación y muestras de un producto, con los textos cargados en Productos.
+// Lo llama n8n: el flujo dice qué paso toca, el texto sale de la base.
+conversationRouter.post('/:id/paso', requireAuthOrService, conversationController.enviarPaso);
+
 // Reintentar el envío de un mensaje que Meta rechazó (conserva el adjunto)
 conversationRouter.post('/:id/messages/:messageId/retry', requireAuth, conversationController.retryMessage);
 

@@ -2,6 +2,7 @@ import { orderRepository } from '../repositories/order.repository.js';
 import { conversationRepository } from '../repositories/conversation.repository.js';
 import { channelRepository } from '../repositories/channel.repository.js';
 import { messageRepository } from '../repositories/message.repository.js';
+import crypto from 'crypto';
 import { settingRepository } from '../repositories/setting.repository.js';
 import { graphApiService } from './graph-api.service.js';
 import { socketManager } from '../sockets/index.js';
@@ -25,7 +26,7 @@ export const CLAVE_AJUSTE_MENSAJES = 'mensajes_recuperacion';
  * precio de recuperación, o la persona ya lo tiene, el mensaje no puede
  * presentar el precio de siempre como si fuera una rebaja.
  *
- * Son neutros a propósito (sin "pintar", sin "Dios bendiga"): valen para
+ * Son neutros a propósito, sin nada propio de un producto: valen para
  * cualquier producto hasta que cada proyecto tenga los suyos (MP-08).
  */
 export const DEFAULT_MENSAJES_RECUPERACION = Object.freeze({
@@ -47,14 +48,16 @@ export const CLAVES_MENSAJES = Object.freeze(Object.keys(DEFAULT_MENSAJES_RECUPE
  * copiados en la base, y cambiar los de arriba no alcanzaría: se seguirían
  * mandando los viejos, que prometían lugares apartados y promos "por hoy".
  * Solo se ignora un valor guardado cuando es idéntico a uno de estos; lo que
- * alguien escribió a mano se respeta.
+ * alguien escribió a mano se respeta. Se guardan las huellas (SHA-256) y no
+ * los textos: eran textos de un producto puntual y no tienen por qué estar
+ * escritos en el código.
  */
-const DEFAULTS_ANTERIORES = Object.freeze({
-  nivel_1_decidido: '¡Hola, {{nombre}}! 🤍\nQuería confirmar si te llegó bien la info de la cuenta o si te es más cómodo transferir por alias.\n\nApenas me pases la captura del comprobante te libero el archivo de inmediato para que tus peques ya puedan empezar a pintar hoy 🙌🏻✨',
-  nivel_1_mirando: '¡Hola, {{nombre}}! 🤍\nTe dejé apartado tu lugar para {{producto}}.\n\nMuchos papás lo están aprovechando esta semana para tener una actividad sana en casa y alejar a los chicos de las pantallas. ¿Te gustaría que te pase los datos para descargarlo hoy? 🙌🏻✨',
-  nivel_2_decidido: '¡Hola, {{nombre}}! 🤍\nPara darte una mano y que tus nenes no se queden sin sus historias, te activé una atención especial para que te lleves todo completo hoy por solo {{precio}}.\n\n¿Te paso los datos así aprovechás la promo antes de que venza? 📲✨',
-  nivel_2_mirando: '¡Hola, {{nombre}}! 🤍\nSe liberó una promo relámpago por hoy: podés llevarte {{producto}} completo a solo {{precio}}.\n\nTe quedan 50 láminas narradas con sus reflexiones y el diploma para imprimir cuando quieras. ¿Te paso la cuenta para activarlo? 🙌🏻',
-  nivel_3: '¡Hola, {{nombre}}! 🤍\nPaso a avisarte que hoy cierro los accesos pendientes para no molestarte más.\n\nSi todavía querés {{producto}}, te mantengo el precio promocional de {{precio}} durante el día de hoy. Solo respondeme con un "SÍ" y te paso los datos.\n\nSi decidís dejarlo para más adelante, no hay ningún problema. ¡Que Dios bendiga mucho a tu familia! 🙏🏻✨'
+const HUELLAS_DEFAULTS_ANTERIORES = Object.freeze({
+  nivel_1_decidido: '895c09ddecca6f1ae08a5b0adacbaa4cb4c2152e7603cecda3f7bc238a90dd8c',
+  nivel_1_mirando: '7ed36a6d8b2e7b73a990c9c55deaac8c05d80b7dcda5ae6b075eef8db6c889b9',
+  nivel_2_decidido: 'b8532b88ca105f5685e94eee61a1a76d5910468ecf07d10120d38cd41caa4949',
+  nivel_2_mirando: '66daad688a00391bc99a40f0b8a9375452493e7b3f9bd8217cd13d8d6afe16e3',
+  nivel_3: 'c3ab9fcd2ac9b6d803de919c14421aeb4028eb085eac73aaa87a642d43d152aa'
 });
 
 /**
@@ -190,7 +193,8 @@ export const recoveryService = {
     const salida = {};
     for (const clave of CLAVES_MENSAJES) {
       const valor = typeof guardados?.[clave] === 'string' ? guardados[clave].trim() : '';
-      const esDefaultViejo = Boolean(valor) && valor === DEFAULTS_ANTERIORES[clave];
+      const esDefaultViejo = Boolean(valor) &&
+        crypto.createHash('sha256').update(valor).digest('hex') === HUELLAS_DEFAULTS_ANTERIORES[clave];
       salida[clave] = valor && !esDefaultViejo ? valor : DEFAULT_MENSAJES_RECUPERACION[clave];
     }
     return salida;

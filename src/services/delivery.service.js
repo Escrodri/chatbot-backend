@@ -4,6 +4,7 @@ import { messageRepository } from '../repositories/message.repository.js';
 import { tagRepository } from '../repositories/tag.repository.js';
 import { graphApiService } from './graph-api.service.js';
 import { socketManager } from '../sockets/index.js';
+import { mensajesProductoService } from './mensajes-producto.service.js';
 
 /**
  * Entrega del producto digital y aviso de comprobante rechazado.
@@ -75,27 +76,27 @@ function saludoSegunHora() {
 }
 
 export const deliveryService = {
-  /** Mensaje de entrega. Sale del producto para poder editarlo sin tocar código. */
+  /**
+   * Mensaje de entrega.
+   *
+   * Lo escribe cada producto en el panel (Mensajes del bot → Entrega). Si el
+   * producto todavía no tiene uno, sale lo mínimo que sirve para cualquier
+   * material: confirmación, nombre, link y la nota del producto si la hay.
+   * Nunca el texto de otro producto.
+   */
   armarMensajeEntrega(pedido) {
+    const propio = mensajesProductoService.armarEntrega(pedido);
+    if (propio) return propio;
+
     const nombre = primerNombre(pedido);
     const partes = [
-      nombre ? `¡Comprobante recibido con éxito, muchísimas gracias, ${nombre}! 🙏🏻🤍` : '¡Comprobante recibido con éxito, muchísimas gracias! 🙏🏻🤍',
-      'Acá tenés tu material completo:',
+      nombre ? `¡Listo, ${nombre}! Ya confirmamos tu pago 🙌` : '¡Listo! Ya confirmamos tu pago 🙌',
       '',
-      `📄 *${pedido.product_name || 'Grandes Historias de la Biblia'}*`,
+      pedido.product_name ? `📄 *${pedido.product_name}*` : null,
       pedido.delivery_url
-    ];
+    ].filter(v => v !== null);
 
-    if (pedido.delivery_note) {
-      partes.push('', pedido.delivery_note);
-    } else {
-      partes.push(
-        '',
-        '💡 Consejo: Podés ir imprimiendo una historia por semana (son 5 páginas por relato). Así tienen una actividad constante y al finalizar completan juntos el diploma de la última página.',
-        '',
-        '¡Que sea de gran bendición para tu hogar y disfruten mucho! ✨'
-      );
-    }
+    if (pedido.delivery_note) partes.push('', pedido.delivery_note);
 
     return partes.join('\n');
   },
