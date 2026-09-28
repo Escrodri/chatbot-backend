@@ -22,7 +22,7 @@ export const productRepository = {
 
     if (teamId) {
       params.push(teamId);
-      condiciones.push(`team_id = $${params.length}`);
+      condiciones.push(`(team_id = $${params.length} OR team_id IS NULL)`);
     }
 
     if (soloActivos) {
@@ -105,7 +105,8 @@ export const productRepository = {
       sortOrder: 'sort_order',
       precioRecuperacion: 'precio_recuperacion',
       previewUrls: 'preview_urls',
-      mensajes: 'mensajes'
+      mensajes: 'mensajes',
+      teamId: 'team_id'
     };
 
     const sets = [];

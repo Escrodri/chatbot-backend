@@ -617,10 +617,13 @@ export async function initDatabase() {
     //
     // Hasta el 26/09 este archivo reescribía un producto en cada arranque:
     // resumen, precio y precio de recuperación. Lo que se cambiaba
-    // en el panel se perdía con el próximo despliegue, y si la base tenía un
-    // único producto que no era ese, lo pisaba igual. El catálogo es de la
-    // base y se edita desde Productos; el código no opina sobre qué se vende
-    // ni a cuánto.
+    // Garantizar que los productos huérfanos sin team_id queden asignados al equipo principal (1)
+    // para que no queden invisibles a los operadores del negocio.
+    try {
+      await client.query('UPDATE products SET team_id = 1 WHERE team_id IS NULL');
+    } catch (e) {
+      console.warn('⚠️ [DATABASE] Nota sobre team_id de productos:', e.message);
+    }
   } catch (error) {
     console.error('❌ [DATABASE ERROR] Error al inicializar esquema PostgreSQL:', error.message);
     throw error;

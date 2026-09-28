@@ -117,6 +117,7 @@ export const productController = {
 
         // Lo que el bot dice sobre este producto, tal como se cargó en el panel.
         mensajes: normalizarMensajes(p.mensajes).mensajes,
+        team_id: p.team_id || null,
 
         ...(esAdmin ? {
           delivery_url: p.delivery_url || '',
@@ -252,7 +253,7 @@ export const productController = {
       }
 
       const creado = await productRepository.create({
-        teamId: req.user?.team_id || null,
+        teamId: req.user?.team_id || (req.body?.team_id ? Number(req.body.team_id) : 1),
         slug: String(slug).trim(),
         name: String(name).trim(),
         description: description || '',
@@ -302,6 +303,7 @@ export const productController = {
       if (b.cover_url !== undefined) cambios.coverUrl = b.cover_url;
       if (b.is_active !== undefined) cambios.isActive = Boolean(b.is_active);
       if (b.sort_order !== undefined) cambios.sortOrder = Number(b.sort_order) || 0;
+      if (b.team_id !== undefined) cambios.teamId = b.team_id ? Number(b.team_id) : null;
 
       // Vaciar el campo es cómo se apaga el descuento de recuperación, así que
       // un valor vacío tiene que poder llegar hasta la base como null.
