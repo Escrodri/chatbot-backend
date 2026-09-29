@@ -12,6 +12,9 @@ productRouter.get('/', requireAuthOrService, productController.list);
 // Datos de entrega (el link del PDF). Se pide recién después de confirmar el pago.
 productRouter.get('/:id/delivery', requireAuthOrService, productController.getDelivery);
 
+// Un producto completo, para la pantalla de edición. Solo administradores.
+productRouter.get('/:id', requireAuthOrService, requireAdmin, productController.getOne);
+
 // Alta, edición y baja: solo administradores con sesión.
 productRouter.post('/upload-image', requireAuthOrService, requireAdmin, productController.uploadImage);
 productRouter.post('/', requireAuthOrService, requireAdmin, productController.create);

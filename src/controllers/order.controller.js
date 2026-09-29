@@ -1,5 +1,7 @@
 import { orderRepository, ETAPAS, posicionEtapa, soportaEquipos } from '../repositories/order.repository.js';
 import { productRepository } from '../repositories/product.repository.js';
+import { pedidoItemRepository } from '../repositories/pedido-item.repository.js';
+import { normalizarBump } from '../services/producto-textos.js';
 import { conversationRepository } from '../repositories/conversation.repository.js';
 import { deliveryService } from '../services/delivery.service.js';
 import { socketManager } from '../sockets/index.js';
@@ -182,6 +184,37 @@ export const orderController = {
       };
       delete pago.precio_persona;
 
+      // Lo que tiene que pagar en total, con los extras que sumó. Es lo que el
+      // guion usa como "Monto" si manda los datos de pago por su cuenta.
+      const items = await pedidoItemRepository.listar(pedido.id).catch(() => []);
+      const extras = items.reduce((s, i) => s + (Number(i.precio) || 0), 0);
+      const montoTotal = (Number(pp.precio) || Number(producto?.price) || 0) + extras;
+      const total = {
+        monto: montoTotal,
+        formateado: esGuaranies ? formatoGs(montoTotal) : null,
+        extras: items.map(i => ({ product_id: i.product_id, nombre: i.nombre, precio: Number(i.precio) })),
+        extra_estado: pedido?.bump_estado || null
+      };
+
+      // El extra que se ofrece con este producto y qué pasó con él, para que
+      // la IA no conteste a ciegas si la persona pregunta por la oferta que
+      // le acaba de llegar.
+      let extra = null;
+      const { bump } = normalizarBump(producto?.bump);
+      if (producto && !producto.solo_extra && bump.activo && bump.product_id && bump.precio) {
+        const extraProd = await productRepository.findById(bump.product_id).catch(() => null);
+        if (extraProd && extraProd.is_active !== false) {
+          extra = {
+            product_id: extraProd.id,
+            nombre: extraProd.name,
+            descripcion: String(extraProd.description || '').slice(0, 600),
+            precio: bump.precio,
+            precio_formateado: esGuaranies ? formatoGs(bump.precio) : String(bump.precio),
+            estado: pedido?.bump_estado || null
+          };
+        }
+      }
+
       return res.status(existente ? 200 : 201).json({
         order: pedido,
         product: producto
@@ -191,7 +224,9 @@ export const orderController = {
         // Lo que el flujo necesita saber de una: ¿esta persona ya pagó?
         ya_pago: Boolean(existente && ['pagado', 'entregado'].includes(existente.status)),
         pago,
-        precio
+        precio,
+        total,
+        extra
       });
     } catch (error) {
       return res.status(500).json({ error: 'Error al registrar el pedido: ' + error.message });

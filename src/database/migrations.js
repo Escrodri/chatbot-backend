@@ -416,7 +416,52 @@ export async function initDatabase() {
       'ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_adset_id VARCHAR(100)',
       'CREATE INDEX IF NOT EXISTS idx_conversations_adset ON conversations (source_adset_id) WHERE source_adset_id IS NOT NULL',
       'ALTER TABLE anuncios ADD COLUMN IF NOT EXISTS adset_id VARCHAR(100)',
-      'ALTER TABLE anuncios ADD COLUMN IF NOT EXISTS campaign_id VARCHAR(100)'
+      'ALTER TABLE anuncios ADD COLUMN IF NOT EXISTS campaign_id VARCHAR(100)',
+
+      // Varios links de entrega por producto: [{ etiqueta, url }].
+      //
+      // Un producto puede ser más de un archivo (el libro y el diploma, dos
+      // tomos). `delivery_url` queda como copia del primero, porque todo lo
+      // que pregunta "¿este producto tiene con qué entregarse?" lo mira a él.
+      "ALTER TABLE products ADD COLUMN IF NOT EXISTS entregables JSONB NOT NULL DEFAULT '[]'::jsonb",
+
+      // Los productos que tenían un solo link lo pasan a la lista. Solo toca
+      // filas con la lista vacía y un link cargado: no reescribe nada que
+      // alguien haya guardado desde el panel.
+      `UPDATE products
+          SET entregables = jsonb_build_array(jsonb_build_object('etiqueta', '', 'url', delivery_url))
+        WHERE entregables = '[]'::jsonb
+          AND delivery_url IS NOT NULL AND delivery_url <> ''`,
+
+      // El producto extra que se ofrece al tocar "comprar" (order bump):
+      // { activo, product_id, precio, texto, boton_si, boton_no }.
+      "ALTER TABLE products ADD COLUMN IF NOT EXISTS bump JSONB NOT NULL DEFAULT '{}'::jsonb",
+
+      // Un producto que solo se vende como extra de otro: el bot no lo ofrece
+      // suelto ni lo muestra en la lista de productos.
+      'ALTER TABLE products ADD COLUMN IF NOT EXISTS solo_extra BOOLEAN NOT NULL DEFAULT FALSE',
+
+      // Lo que se sumó a un pedido además del producto principal. El
+      // principal sigue en orders.product_id: los pedidos de antes no cambian.
+      // Nombre y precio se copian al sumarlo, para que un cambio de precio en
+      // el panel no cambie lo que esta persona tiene que pagar.
+      `CREATE TABLE IF NOT EXISTS pedido_items (
+         id         SERIAL PRIMARY KEY,
+         order_id   INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+         product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+         nombre     VARCHAR(255) NOT NULL,
+         tipo       VARCHAR(20) NOT NULL DEFAULT 'extra',
+         precio     NUMERIC(14, 2) NOT NULL,
+         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         UNIQUE (order_id, product_id)
+       )`,
+
+      // Qué pasó con la oferta del extra en este pedido: ofrecido, aceptado o
+      // rechazado. Vacío = todavía no se ofreció. Se ofrece una sola vez.
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS bump_estado VARCHAR(20)',
+      // Cuándo se anotó. Sirve para no contestar dos veces al mismo toque:
+      // WhatsApp a veces manda el mismo botón dos veces seguidas.
+      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS bump_at TIMESTAMPTZ'
     ];
 
     for (const sql of columnMigrations) {
@@ -617,6 +662,11 @@ export async function initDatabase() {
     //
     // Hasta el 26/09 este archivo reescribía un producto en cada arranque:
     // resumen, precio y precio de recuperación. Lo que se cambiaba
+    // en el panel se perdía con el próximo despliegue, y si la base tenía un
+    // único producto que no era ese, lo pisaba igual. El catálogo es de la
+    // base y se edita desde Productos; el código no opina sobre qué se vende
+    // ni a cuánto.
+
     // Garantizar que los productos huérfanos sin team_id queden asignados al equipo principal (1)
     // para que no queden invisibles a los operadores del negocio.
     try {

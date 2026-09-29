@@ -260,7 +260,8 @@ export const conversationController = {
         }
       }
 
-      const { status, cuerpo } = await mensajesProductoService.enviarPaso({ conversationId, paso, productId });
+      const repetir = req.body?.repetir === true || req.body?.repetir === 'true';
+      const { status, cuerpo } = await mensajesProductoService.enviarPaso({ conversationId, paso, productId, repetir });
       return res.status(status).json(cuerpo);
     } catch (error) {
       return res.status(500).json({ error: 'Error al mandar el paso: ' + error.message });

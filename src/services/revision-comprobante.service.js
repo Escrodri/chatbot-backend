@@ -1,5 +1,6 @@
 import { orderRepository, posicionEtapa } from '../repositories/order.repository.js';
 import { comprobanteRepository, VEREDICTOS_FINALES } from '../repositories/comprobante.repository.js';
+import { pedidoItemRepository } from '../repositories/pedido-item.repository.js';
 import { conversationRepository } from '../repositories/conversation.repository.js';
 import { datosPagoService } from './datos-pago.service.js';
 import { deliveryService } from './delivery.service.js';
@@ -177,8 +178,12 @@ async function evaluar(orderId, entrada) {
     precioLista: precioLista(pedido),
     momentos: [momentoTransferencia, Date.now(), ...momentosPrevios]
   });
-  const precio = precioPersona.precio;
-  const origenPrecio = describirPrecio(precioPersona);
+  // Lo que se sumó al pedido (el producto extra) también se paga. El precio
+  // especial se aplica al producto; los extras van al precio con que se
+  // aceptaron.
+  const extras = await pedidoItemRepository.totalExtras(id);
+  const precio = precioPersona.precio + extras;
+  const origenPrecio = describirPrecio(precioPersona) + (extras ? ` + extras ${formatoGs(extras)}` : '');
   const cuentaFinal = cuentaLeida.length >= 4 ? cuentaLeida.slice(-4) : null;
 
   // ── Lo que ya pasó en este pedido ──────────────────────────────────────
@@ -198,7 +203,7 @@ async function evaluar(orderId, entrada) {
     fechaTexto,
     tieneDatos,
     yaPago,
-    precioLista: precioPersona.lista,
+    precioLista: precioPersona.lista + extras,
     esPromo: precioPersona.es_promo,
     promoHasta: precioPersona.hasta_texto
   };
@@ -441,10 +446,10 @@ async function evaluar(orderId, entrada) {
     // No se le entrega solo —la promo terminó— pero se le dice exactamente
     // eso, con la fecha, y queda marcado para que decidas si se la respetás.
     const vencida = precioPersona.vencidas
-      .filter(v => total >= v.precio)
+      .filter(v => total >= v.precio + extras)
       .sort((a, b) => a.precio - b.precio)[0];
     if (vencida) {
-      contexto.promoVencidaPrecio = vencida.precio;
+      contexto.promoVencidaPrecio = vencida.precio + extras;
       contexto.promoVencidaHasta = vencida.hasta ? fechaParaguay(vencida.hasta) : '';
       return cerrar('promo_vencida', {
         detalle:
@@ -458,7 +463,7 @@ async function evaluar(orderId, entrada) {
     // Al cliente se le contesta como a cualquier pago parcial —no hay por qué
     // decirle que existe una promo a la que no llegó—, pero el motivo queda
     // distinto para que se entienda al revisarlo.
-    const sinInvitacion = precioPersona.sin_invitacion.find(v => total >= v.precio);
+    const sinInvitacion = precioPersona.sin_invitacion.find(v => total >= v.precio + extras);
     if (sinInvitacion) {
       return cerrar('promo_sin_invitacion', {
         detalle:
@@ -667,7 +672,8 @@ export async function resumenDePago(pedido, lista, persona = {}) {
           ]
         })
       : base;
-    const precio = precioPersona.precio;
+    const extras = await pedidoItemRepository.totalExtras(pedido.id);
+    const precio = precioPersona.precio + extras;
     const lineas = [];
 
     if (yaPago) {
@@ -681,7 +687,7 @@ export async function resumenDePago(pedido, lista, persona = {}) {
     } else if (!filas.length) {
       lineas.push('Todavía no mandó ningún comprobante.');
     } else if (total > 0 && precio && total < precio) {
-      const vencida = (precioPersona.vencidas || []).find(v => total >= v.precio);
+      const vencida = (precioPersona.vencidas || []).find(v => total >= v.precio + extras);
       lineas.push(
         vencida
           ? `Según sus comprobantes transfirió ${formatoGs(total)}, que era el precio de una promo que ya terminó ` +

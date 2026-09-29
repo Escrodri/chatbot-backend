@@ -73,9 +73,13 @@ export function productoDelTexto(texto, productos) {
   return puntajes[0].p;
 }
 
-/** El id de producto que viaja dentro de un botón: "comprar:12", "prod:12". */
+/**
+ * El id de producto que viaja dentro de un botón: "comprar:12", "prod:12".
+ * Los botones del extra llevan el producto principal ("bump_si:12"): la
+ * respuesta a la oferta es sobre ese pedido.
+ */
 export function productoDelBoton(botonId) {
-  const m = String(botonId || '').match(/^(comprar|ver_paginas|prod):(\d+)$/);
+  const m = String(botonId || '').match(/^(comprar|ver_paginas|prod|bump_si|bump_no):(\d+)$/);
   return m ? Number(m[2]) : null;
 }
 
@@ -89,7 +93,8 @@ export function nombreCorto(nombre, max = 24) {
 }
 
 async function catalogoDe(conv) {
-  const todos = await productRepository.list({ soloActivos: true });
+  // Los que solo se venden como extra de otro no se ofrecen sueltos.
+  const todos = await productRepository.list({ soloActivos: true, soloVendibles: true });
   const equipo = conv.team_id || null;
   return todos.filter(p => !equipo || !p.team_id || p.team_id === equipo);
 }

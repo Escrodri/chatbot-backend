@@ -1057,7 +1057,16 @@ export const settingsController = {
   async getRecoveryMessages(req, res) {
     try {
       const messages = await recoveryService.obtenerMensajesConfigurados();
-      return res.json({ messages });
+      // Cuándo sale cada seguimiento y cuándo no se escribe, para que la
+      // pantalla de cada producto lo muestre tal como está configurado.
+      const cfg = envConfig.recuperacion || {};
+      return res.json({
+        messages,
+        escalones: Array.isArray(cfg.escalones) ? [...cfg.escalones] : [],
+        silencio: { desde: cfg.silencioDesde ?? 21, hasta: cfg.silencioHasta ?? 8 },
+        activa: cfg.habilitada !== false,
+        vence_horas: Number(envConfig.ofertas?.recuperacionHoras ?? 72)
+      });
     } catch (error) {
       return res.status(500).json({ error: 'Error al obtener mensajes de remarketing: ' + error.message });
     }

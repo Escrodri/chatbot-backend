@@ -13,6 +13,7 @@ import {
   proximoHorarioParaEscribir
 } from '../config/env.config.js';
 import { precioParaPersona, registrarOfertaRecuperacion, fechaParaguay } from './precio.service.js';
+import { normalizarMensajes } from './producto-textos.js';
 
 export const CLAVE_AJUSTE_MENSAJES = 'mensajes_recuperacion';
 
@@ -26,8 +27,9 @@ export const CLAVE_AJUSTE_MENSAJES = 'mensajes_recuperacion';
  * precio de recuperación, o la persona ya lo tiene, el mensaje no puede
  * presentar el precio de siempre como si fuera una rebaja.
  *
- * Son neutros a propósito, sin nada propio de un producto: valen para
- * cualquier producto hasta que cada proyecto tenga los suyos (MP-08).
+ * Son neutros a propósito, sin nada propio de un producto. Son la base: cada
+ * producto arranca con estos en su pantalla y los cambia ahí. Solo se usan
+ * tal cual para un producto que todavía no tiene los suyos guardados.
  */
 export const DEFAULT_MENSAJES_RECUPERACION = Object.freeze({
   nivel_1_decidido: '¡Hola, {{nombre}}! 🤍\nTe escribo por si se complicó algo con la transferencia. ¿Querés que te pase de nuevo los datos?\n\nApenas me mandes la captura del comprobante, te llega {{producto}} por este mismo chat 🙌🏻',
@@ -201,6 +203,22 @@ export const recoveryService = {
   },
 
   /**
+   * Los textos de seguimiento para el producto de este pedido.
+   *
+   * Cada producto tiene los suyos, cargados en su pantalla. Si a un producto
+   * le falta alguno (los que se cargaron antes de que existiera esta
+   * sección), ese mensaje sale de los textos base. Nunca de otro producto.
+   *
+   * @param {object} candidato Fila de `paraRecuperar` (trae `product_mensajes`)
+   * @returns {Promise<Record<string, string>>}
+   */
+  async textosPara(candidato) {
+    const base = await this.obtenerMensajesConfigurados();
+    const propios = normalizarMensajes(candidato?.product_mensajes).mensajes.seguimiento.textos;
+    return Object.fromEntries(CLAVES_MENSAJES.map(k => [k, propios[k] || base[k]]));
+  },
+
+  /**
    * Guarda los mensajes de recuperación editados por el usuario.
    */
   async guardarMensajesConfigurados(mensajes, userId = null) {
@@ -254,7 +272,7 @@ export const recoveryService = {
     const vence = conDescuento ? fechaParaguay(Date.now() + horas * 3600000) : '';
 
     const cual = segmento(candidato.etapa);
-    const cfg = await this.obtenerMensajesConfigurados();
+    const cfg = await this.textosPara(candidato);
 
     let plantilla = '';
     if (nivel === 1) {

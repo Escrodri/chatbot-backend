@@ -4,7 +4,9 @@ import { messageRepository } from '../repositories/message.repository.js';
 import { tagRepository } from '../repositories/tag.repository.js';
 import { graphApiService } from './graph-api.service.js';
 import { socketManager } from '../sockets/index.js';
-import { mensajesProductoService } from './mensajes-producto.service.js';
+import { mensajesProductoService, bloqueLinks } from './mensajes-producto.service.js';
+import { pedidoItemRepository } from '../repositories/pedido-item.repository.js';
+import { linksDe } from './producto-textos.js';
 
 /**
  * Entrega del producto digital y aviso de comprobante rechazado.
@@ -84,8 +86,8 @@ export const deliveryService = {
    * material: confirmación, nombre, link y la nota del producto si la hay.
    * Nunca el texto de otro producto.
    */
-  armarMensajeEntrega(pedido) {
-    const propio = mensajesProductoService.armarEntrega(pedido);
+  armarMensajeEntrega(pedido, items = []) {
+    const propio = mensajesProductoService.armarEntrega(pedido, items);
     if (propio) return propio;
 
     const nombre = primerNombre(pedido);
@@ -93,7 +95,7 @@ export const deliveryService = {
       nombre ? `¡Listo, ${nombre}! Ya confirmamos tu pago 🙌` : '¡Listo! Ya confirmamos tu pago 🙌',
       '',
       pedido.product_name ? `📄 *${pedido.product_name}*` : null,
-      pedido.delivery_url
+      bloqueLinks({ entregables: pedido.product_entregables, delivery_url: pedido.delivery_url }, items)
     ].filter(v => v !== null);
 
     if (pedido.delivery_note) partes.push('', pedido.delivery_note);
@@ -219,11 +221,15 @@ export const deliveryService = {
     }
   },
 
-  /** Manda el enlace de descarga. */
+  /**
+   * Manda los links de descarga de todo lo que se compró: el producto y los
+   * extras que se sumaron al pedido.
+   */
   async entregar(pedido, actorUserId = null) {
     if (!pedido) return { enviado: false, motivo: 'sin_pedido', detalle: null };
 
-    if (!pedido.delivery_url) {
+    const principal = { entregables: pedido.product_entregables, delivery_url: pedido.delivery_url };
+    if (!linksDe(principal).length) {
       return {
         enviado: false,
         motivo: 'sin_enlace',
@@ -231,7 +237,29 @@ export const deliveryService = {
       };
     }
 
-    return this.enviar(pedido, this.armarMensajeEntrega(pedido), actorUserId, 'entregado');
+    let items = [];
+    try {
+      items = await pedidoItemRepository.listar(pedido.id);
+    } catch (err) {
+      // Sin la lista de extras se entrega el principal y se marca para que
+      // alguien mande el resto: no entregar nada sería peor.
+      console.warn(`⚠️ [ENTREGA] Pedido #${pedido.id}: no se pudieron leer los extras. ${err.message}`);
+      await this.marcarParaVerificar(pedido.conversation_id, 'extras_sin_leer', err.message);
+    }
+
+    const resultado = await this.enviar(pedido, this.armarMensajeEntrega(pedido, items), actorUserId, 'entregado');
+
+    // Un extra pagado sin link cargado no puede quedar en silencio.
+    const sinLink = items.filter(i => !linksDe(i).length);
+    if (resultado.enviado && sinLink.length) {
+      await this.marcarParaVerificar(
+        pedido.conversation_id,
+        'extra_sin_link',
+        `Pagó ${sinLink.map(i => `"${i.nombre}"`).join(', ')} y no tiene link de entrega cargado. Mandáselo a mano.`
+      );
+    }
+
+    return resultado;
   },
 
   /** Avisa que el comprobante todavía no figura acreditado. */

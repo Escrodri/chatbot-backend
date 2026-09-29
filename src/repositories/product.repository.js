@@ -13,10 +13,13 @@ export const productRepository = {
   /**
    * Lista los productos de un equipo.
    *
-   * @param {{ teamId?: number|null, soloActivos?: boolean }} opciones
+   * `soloVendibles` deja afuera los que solo se venden como extra de otro:
+   * el bot no los ofrece sueltos ni los muestra en la lista de productos.
+   *
+   * @param {{ teamId?: number|null, soloActivos?: boolean, soloVendibles?: boolean }} opciones
    * @returns {Promise<object[]>}
    */
-  async list({ teamId = null, soloActivos = true } = {}) {
+  async list({ teamId = null, soloActivos = true, soloVendibles = false } = {}) {
     const condiciones = [];
     const params = [];
 
@@ -29,12 +32,17 @@ export const productRepository = {
       condiciones.push('is_active = TRUE');
     }
 
+    if (soloVendibles) {
+      condiciones.push('COALESCE(solo_extra, FALSE) = FALSE');
+    }
+
     const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
 
     const { rows } = await query(
       `SELECT id, team_id, slug, name, description, resumen, price, currency,
               precio_recuperacion, preview_urls, mensajes,
-              delivery_url, delivery_note, cover_url, is_active, sort_order,
+              delivery_url, delivery_note, entregables, bump, solo_extra,
+              cover_url, is_active, sort_order,
               created_at, updated_at
        FROM products
        ${where}
@@ -48,6 +56,14 @@ export const productRepository = {
   async findById(id) {
     const { rows } = await query(`SELECT * FROM products WHERE id = $1`, [id]);
     return rows[0] || null;
+  },
+
+  /** Varios productos por id, en una sola consulta. */
+  async findByIds(ids = []) {
+    const limpios = [...new Set(ids.map(Number).filter(n => Number.isInteger(n) && n > 0))];
+    if (!limpios.length) return [];
+    const { rows } = await query(`SELECT * FROM products WHERE id = ANY($1::int[])`, [limpios]);
+    return rows;
   },
 
   async findBySlug(slug) {
@@ -70,18 +86,22 @@ export const productRepository = {
     sortOrder = 0,
     precioRecuperacion = null,
     previewUrls = null,
-    mensajes = {}
+    mensajes = {},
+    entregables = [],
+    bump = {},
+    soloExtra = false
   }) {
     const { rows } = await query(
       `INSERT INTO products
          (team_id, slug, name, description, resumen, price, currency,
           delivery_url, delivery_note, cover_url, is_active, sort_order,
-          precio_recuperacion, preview_urls, mensajes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
+          precio_recuperacion, preview_urls, mensajes, entregables, bump, solo_extra)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb,$18)
        RETURNING *`,
       [teamId, slug, name, description, resumen, price, currency,
        deliveryUrl, deliveryNote, coverUrl, isActive, sortOrder,
-       precioRecuperacion, previewUrls, JSON.stringify(mensajes || {})]
+       precioRecuperacion, previewUrls, JSON.stringify(mensajes || {}),
+       JSON.stringify(entregables || []), JSON.stringify(bump || {}), Boolean(soloExtra)]
     );
     return rows[0];
   },
@@ -106,8 +126,13 @@ export const productRepository = {
       precioRecuperacion: 'precio_recuperacion',
       previewUrls: 'preview_urls',
       mensajes: 'mensajes',
+      entregables: 'entregables',
+      bump: 'bump',
+      soloExtra: 'solo_extra',
       teamId: 'team_id'
     };
+
+    const JSON_COLS = { mensajes: '{}', entregables: '[]', bump: '{}' };
 
     const sets = [];
     const params = [];
@@ -116,8 +141,10 @@ export const productRepository = {
       if (cambios[clave] !== undefined) {
         // JSONB va como texto y se castea: si se pasara el objeto tal cual, pg
         // convertiría los arreglos de adentro al formato de arreglo de Postgres.
-        const esJson = columna === 'mensajes';
-        params.push(esJson ? JSON.stringify(cambios[clave] || {}) : cambios[clave]);
+        const esJson = Object.prototype.hasOwnProperty.call(JSON_COLS, columna);
+        params.push(esJson
+          ? JSON.stringify(cambios[clave] || JSON.parse(JSON_COLS[columna]))
+          : cambios[clave]);
         sets.push(`${columna} = $${params.length}${esJson ? '::jsonb' : ''}`);
       }
     }

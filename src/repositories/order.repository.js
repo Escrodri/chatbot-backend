@@ -53,6 +53,36 @@ export async function soportaEquipos() {
   return _soportaEquipos;
 }
 
+/**
+ * ¿Existe la tabla de extras de los pedidos?
+ *
+ * La crea la migración al arrancar. Se pregunta igual, una vez, porque el
+ * tablero de pedidos no puede caerse entero si por algún motivo no está:
+ * sin la tabla, los pedidos se listan como antes, sin extras.
+ */
+let _soportaExtras = null;
+export async function soportaExtras() {
+  if (_soportaExtras === true) return true;
+  try {
+    const { rows } = await query(
+      `SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'pedido_items' LIMIT 1`
+    );
+    _soportaExtras = rows.length > 0;
+  } catch {
+    _soportaExtras = false;
+  }
+  return _soportaExtras;
+}
+
+/** Las columnas con lo que se sumó a cada pedido, o ceros si no hay tabla. */
+function columnasExtras(conExtras) {
+  return conExtras
+    ? `COALESCE((SELECT SUM(i.precio) FROM pedido_items i WHERE i.order_id = o.id), 0) AS extras_total,
+       (SELECT string_agg(i.nombre, ', ' ORDER BY i.id) FROM pedido_items i WHERE i.order_id = o.id) AS extras_nombres`
+    : `0::numeric AS extras_total, NULL::text AS extras_nombres`;
+}
+
 /** Posición de una etapa en la escalera, o -1 si no existe. */
 export function posicionEtapa(etapa) {
   return ETAPAS.indexOf(String(etapa || ''));
@@ -126,7 +156,8 @@ export const orderRepository = {
       // entregar, y sin esto lo estaban haciendo a ciegas.
       `SELECT o.*, p.name AS product_name, p.slug AS product_slug,
               p.price, p.precio_recuperacion, p.delivery_url, p.delivery_note,
-              p.mensajes AS product_mensajes,
+              p.mensajes AS product_mensajes, p.entregables AS product_entregables,
+              p.currency AS product_currency,
               c.channel_id, ${conEquipos ? 'ch.team_id' : 'NULL::int AS team_id'}
        FROM orders o
        LEFT JOIN products p ON o.product_id = p.id
@@ -140,9 +171,11 @@ export const orderRepository = {
 
   /** Todos los pedidos de una conversación, con el nombre del producto resuelto. */
   async listByConversation(conversationId) {
+    const conExtras = await soportaExtras();
     const { rows } = await query(
       `SELECT o.*, p.name AS product_name, p.slug AS product_slug,
-              p.delivery_url, p.delivery_note
+              p.delivery_url, p.delivery_note,
+              ${columnasExtras(conExtras)}
        FROM orders o
        LEFT JOIN products p ON o.product_id = p.id
        WHERE o.conversation_id = $1
@@ -194,9 +227,11 @@ export const orderRepository = {
     params.push(Math.min(limit, 500));
     params.push(offset);
 
+    const conExtras = await soportaExtras();
     const { rows } = await query(
       `SELECT o.*, p.name AS product_name, p.slug AS product_slug,
-              (p.delivery_url IS NOT NULL AND p.delivery_url <> '') AS product_entregable
+              (p.delivery_url IS NOT NULL AND p.delivery_url <> '') AS product_entregable,
+              ${columnasExtras(conExtras)}
        FROM orders o
        LEFT JOIN products p ON o.product_id = p.id
        LEFT JOIN conversations c ON o.conversation_id = c.id
@@ -441,7 +476,8 @@ export const orderRepository = {
               ct.name AS contact_name,
               ch.platform,
               p.name AS product_name, p.price AS product_price,
-              p.currency AS product_currency, p.precio_recuperacion
+              p.currency AS product_currency, p.precio_recuperacion,
+              p.mensajes AS product_mensajes
        FROM orders o
        INNER JOIN conversations c ON o.conversation_id = c.id
        INNER JOIN channels ch ON c.channel_id = ch.id
@@ -457,6 +493,9 @@ export const orderRepository = {
          -- más tarde, no recuperan a nadie: le confirman a esa persona que del
          -- otro lado hay una máquina que no leyó lo que escribió.
          AND c.molesto_at IS NULL
+         -- Cada producto decide si tiene seguimiento. Apagado en el panel, no
+         -- se le escribe a nadie por ese producto.
+         AND COALESCE((p.mensajes->'seguimiento'->>'activo')::boolean, TRUE)
          -- Con varios productos, una persona puede tener dos pedidos a
          -- medio camino. Recibe un solo seguimiento: si a otro de sus pedidos
          -- ya se le insistió hace poco, este espera.
@@ -569,6 +608,35 @@ export const orderRepository = {
           )`
     );
     return rows[0]?.cantidad || 0;
+  },
+
+  /**
+   * Anota qué pasó con la oferta del producto extra.
+   *
+   * 'ofrecido' solo se escribe si todavía no había nada: el extra se ofrece
+   * una sola vez por pedido, y dos toques seguidos en "Lo quiero" no pueden
+   * mandar la oferta dos veces. Devuelve null si no escribió.
+   *
+   * 'aceptado' y 'rechazado' se pueden pisar entre sí mientras el pedido no
+   * tenga un comprobante: quien tocó "No" y después "Sí" cambió de idea, y
+   * eso vale.
+   *
+   * @param {number} id
+   * @param {'ofrecido'|'aceptado'|'rechazado'} estado
+   * @returns {Promise<object|null>}
+   */
+  async marcarBump(id, estado) {
+    if (!['ofrecido', 'aceptado', 'rechazado'].includes(estado)) return null;
+    const condicion = estado === 'ofrecido'
+      ? 'bump_estado IS NULL'
+      : "status = 'interesado'";
+    const { rows } = await query(
+      `UPDATE orders SET bump_estado = $2, bump_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND ${condicion}
+        RETURNING *`,
+      [id, estado]
+    );
+    return rows[0] || null;
   },
 
   async marcarRecuperacion(id, nivel, seEnvio = true) {
@@ -774,9 +842,19 @@ export const orderRepository = {
 
   /** Resumen para el tablero: cuántos hay en cada estado. */
   async resumen() {
+    // El monto de cada estado suma también los extras: un pedido de 19.000
+    // con un extra de 10.000 es una venta de 29.000.
+    const conExtras = await soportaExtras();
     const { rows } = await query(
-      `SELECT status, COUNT(*)::int AS cantidad, COALESCE(SUM(amount), 0) AS monto
-       FROM orders GROUP BY status`
+      conExtras
+        ? `SELECT o.status, COUNT(*)::int AS cantidad,
+                  COALESCE(SUM(o.amount), 0) + COALESCE(SUM(x.total), 0) AS monto
+             FROM orders o
+             LEFT JOIN (SELECT order_id, SUM(precio) AS total FROM pedido_items GROUP BY order_id) x
+               ON x.order_id = o.id
+            GROUP BY o.status`
+        : `SELECT status, COUNT(*)::int AS cantidad, COALESCE(SUM(amount), 0) AS monto
+             FROM orders GROUP BY status`
     );
     return rows;
   }
