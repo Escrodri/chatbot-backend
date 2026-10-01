@@ -34,7 +34,10 @@ const COMUNES = new Set([
   'pdf', 'libro', 'libros', 'para', 'colorear', 'pintar', 'material', 'materiales',
   'quiero', 'hola', 'info', 'informacion', 'precio', 'como', 'este', 'esta', 'ese',
   'digital', 'imprimir', 'imprimible', 'ninos', 'nino', 'ninas', 'nina', 'chicos',
-  'grandes', 'mejores', 'completo', 'completa', 'desde', 'hasta', 'sobre', 'todo', 'todos'
+  'grandes', 'mejores', 'completo', 'completa', 'desde', 'hasta', 'sobre', 'todo', 'todos',
+  'dia', 'dias', 'buen', 'bueno', 'buena', 'buenos', 'buenas', 'tarde', 'tardes',
+  'noche', 'noches', 'saludos', 'saludo', 'gracias', 'favor', 'por', 'que', 'con',
+  'del', 'las', 'los', 'una', 'uno', 'unas', 'unos', 'mas', 'menos'
 ]);
 
 function normalizar(t) {

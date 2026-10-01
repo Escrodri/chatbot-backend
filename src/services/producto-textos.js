@@ -136,6 +136,7 @@ export function normalizarMensajes(entrada) {
   const mensajes = {
     saludo_anuncio: texto(e.saludo_anuncio),
     frases_anuncio: texto(e.frases_anuncio),
+    nombre_corto: texto(e.nombre_corto),
     presentacion: presentacion.slice(0, LIMITES.partes),
     boton_comprar: texto(e.boton_comprar),
     boton_muestras: texto(e.boton_muestras),
@@ -149,6 +150,10 @@ export function normalizarMensajes(entrada) {
       textos: Object.fromEntries(CLAVES_SEGUIMIENTO.map(k => [k, texto(textosSeg[k])]))
     }
   };
+
+  if (mensajes.nombre_corto.length > LIMITES.boton) {
+    errores.push(`El nombre corto para botones tiene ${mensajes.nombre_corto.length} caracteres y WhatsApp acepta hasta ${LIMITES.boton}.`);
+  }
 
   for (const [clave, nombre] of [['boton_comprar', 'El botón para comprar'], ['boton_muestras', 'El botón para ver muestras']]) {
     if (mensajes[clave].length > LIMITES.boton) {
