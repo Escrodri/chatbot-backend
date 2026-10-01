@@ -407,7 +407,13 @@ export const mensajesProductoService = {
         envios.push({ texto: renderizar(t, vars), botones: i === partes.length - 1 ? botones : [] });
       });
     } else {
-      if (mensajes.muestras_intro) envios.push({ texto: renderizar(mensajes.muestras_intro, vars) });
+      if (mensajes.muestras_intro) {
+        const textoIntro = renderizar(mensajes.muestras_intro, vars);
+        const partesIntro = textoIntro.split(/\n\s*---\s*\n/).map(t => t.trim()).filter(Boolean);
+        for (const p of partesIntro) {
+          envios.push({ texto: p });
+        }
+      }
       for (const url of muestras) envios.push({ imagen: url });
 
       const cierre = mensajes.muestras_cierre || '*{{producto}}* — {{precio_texto}}';
