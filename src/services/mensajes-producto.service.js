@@ -465,7 +465,15 @@ export const mensajesProductoService = {
 
     const envios = [];
     if (extra.cover_url) envios.push({ imagen: extra.cover_url });
-    envios.push({ texto: renderizar(bump.texto || EXTRA_POR_DEFECTO, vars), botones });
+    const textoCompleto = renderizar(bump.texto || EXTRA_POR_DEFECTO, vars);
+    const partesBump = textoCompleto.split(/\n\s*---\s*\n/).map(t => t.trim()).filter(Boolean);
+    if (partesBump.length > 1) {
+      partesBump.forEach((t, i) => {
+        envios.push({ texto: t, botones: i === partesBump.length - 1 ? botones : [] });
+      });
+    } else {
+      envios.push({ texto: textoCompleto, botones });
+    }
 
     const resultados = await mandarEnOrden(conv, canal, envios);
     await orderRepository.marcarEtapa(pedido.id, 'pidio_comprar').catch(() => {});
