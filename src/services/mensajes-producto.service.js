@@ -391,9 +391,10 @@ export const mensajesProductoService = {
     const envios = [];
 
     if (paso === 'presentacion') {
+      const tieneMuestras = muestras.length > 0 || Boolean(mensajes.muestras_intro) || Boolean(mensajes.boton_muestras);
       const botones = [
-        ...(muestras.length ? [{ id: `ver_paginas:${producto.id}`, title: mensajes.boton_muestras || BOTON_MUESTRAS }] : []),
-        comprar
+        comprar,
+        ...(tieneMuestras ? [{ id: `ver_paginas:${producto.id}`, title: mensajes.boton_muestras || BOTON_MUESTRAS }] : [])
       ];
 
       // Sin mensajes cargados todavía, el producto se presenta con sus propios
