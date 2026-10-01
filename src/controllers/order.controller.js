@@ -204,12 +204,21 @@ export const orderController = {
       if (producto && !producto.solo_extra && bump.activo && bump.product_id && bump.precio) {
         const extraProd = await productRepository.findById(bump.product_id).catch(() => null);
         if (extraProd && extraProd.is_active !== false) {
+          // Los dos totales, ya sumados: la IA no hace cuentas. Sin esto, a
+          // quien escribía "el de 35" le contestaba que esa versión no existía.
+          const base = Number(pp.precio) || Number(producto.price) || 0;
+          const conExtra = base + Number(bump.precio);
+          const fmt = (v) => (esGuaranies ? formatoGs(v) : String(v));
           extra = {
             product_id: extraProd.id,
             nombre: extraProd.name,
             descripcion: String(extraProd.description || '').slice(0, 600),
             precio: bump.precio,
-            precio_formateado: esGuaranies ? formatoGs(bump.precio) : String(bump.precio),
+            precio_formateado: fmt(bump.precio),
+            total_sin_extra: base,
+            total_sin_extra_formateado: fmt(base),
+            total_con_extra: conExtra,
+            total_con_extra_formateado: fmt(conExtra),
             estado: pedido?.bump_estado || null
           };
         }

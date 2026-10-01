@@ -16,6 +16,9 @@
  *   muestras_cierre  Lo que se dice después, con el botón de comprar.
  *   pago             El mensaje con los datos para transferir.
  *   entrega          El mensaje con el que se entrega el material.
+ *   guia_ia          Lo que la IA tiene que saber para vender este producto:
+ *                    a quién le sirve, cómo contestar las dudas típicas, qué
+ *                    no prometer. No se le manda al cliente: lo lee la IA.
  *   seguimiento      { activo, textos: { nivel_1_decidido, … } } — los
  *                    mensajes para quien se quedó a mitad de camino.
  *
@@ -32,7 +35,8 @@ export const LIMITES = Object.freeze({
   texto: 4096,
   boton: 20,
   partes: 3,
-  links: 10
+  links: 10,
+  guia: 6000
 });
 
 /** Las variables que entiende cada paso. Una que no está acá le llegaría al cliente tal cual. */
@@ -144,6 +148,7 @@ export function normalizarMensajes(entrada) {
     muestras_cierre: texto(e.muestras_cierre),
     pago: texto(e.pago),
     entrega: texto(e.entrega),
+    guia_ia: texto(e.guia_ia),
     seguimiento: {
       // Sin dato, encendido: es como funcionaba antes de que existiera el interruptor.
       activo: seg.activo !== false,
@@ -171,6 +176,9 @@ export function normalizarMensajes(entrada) {
   }
   if (mensajes.entrega.length > LIMITES.texto) {
     errores.push(`El mensaje de entrega pasa de ${LIMITES.texto} caracteres.`);
+  }
+  if (mensajes.guia_ia.length > LIMITES.guia) {
+    errores.push(`La guía para la IA tiene ${mensajes.guia_ia.length} caracteres y el máximo es ${LIMITES.guia}. Dejá lo que más cambia la venta.`);
   }
   for (const k of CLAVES_SEGUIMIENTO) {
     if (mensajes.seguimiento.textos[k].length > LIMITES.texto) {

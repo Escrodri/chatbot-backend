@@ -1,6 +1,17 @@
 import { query } from '../database/index.js';
 import { productRepository } from '../repositories/product.repository.js';
+import { orderRepository, posicionEtapa } from '../repositories/order.repository.js';
 import { formatoGs } from '../utils/comprobante.util.js';
+import { normalizarBump, linksDe } from './producto-textos.js';
+import { precioParaPersona } from './precio.service.js';
+import {
+  intencionExtra,
+  pareceEleccion,
+  montosDelTexto,
+  palabrasDe,
+  negadoAntes,
+  VENTANA_RESPUESTA_MS
+} from './intencion-extra.js';
 
 const formatearMonto = (valor, moneda = 'PYG') => (moneda && moneda !== 'PYG' ? `${moneda} ${Number(valor).toLocaleString('es-PY')}` : formatoGs(valor));
 
@@ -20,6 +31,8 @@ const formatearMonto = (valor, moneda = 'PYG') => (moneda && moneda !== 'PYG' ? 
  *   1. tocó un botón que lleva el producto adentro ("comprar:12", "prod:12");
  *   2. escribió el nombre de un producto (el mensaje automático del anuncio
  *      "Quiero el PDF de Grandes Historias de la Biblia" es justamente eso);
+ *      o nombró el precio de otro producto en un mensaje corto ("el de 19"
+ *      en una charla del de 25, si el de 25 no tiene una versión de 19);
  *   3. si no, sigue el que ya tenía la conversación;
  *   4. si mandó una imagen y no tenía ninguno, el de su pedido sin pagar;
  *   5. si el catálogo tiene uno solo, ese;
@@ -123,6 +136,107 @@ export function productoDelBoton(botonId) {
   return m ? Number(m[2]) : null;
 }
 
+/**
+ * Los precios por los que se vende un producto: el de lista, el de
+ * recuperación y, si tiene un extra encendido, el total con el extra.
+ */
+function preciosDe(p) {
+  const lista = Number(p.price) || 0;
+  const salida = [lista];
+  if (p.precio_recuperacion !== null && p.precio_recuperacion !== undefined) salida.push(Number(p.precio_recuperacion));
+  const { bump } = normalizarBump(p.bump);
+  if (bump.activo && bump.precio) salida.push(...salida.map(v => v + Number(bump.precio)));
+  return [...new Set(salida.filter(v => v > 0))];
+}
+
+/**
+ * "el de 19" cuando la charla es de otro producto: el producto que cuesta
+ * eso, si hay uno solo y el de la charla no tiene una versión con ese precio.
+ *
+ * Solo con mensajes cortos que afirman: "tengo 19 mil nomás" o "¿el de 19 qué
+ * trae?" no cambian de producto.
+ *
+ * @param {string} texto
+ * @param {object[]} productos Catálogo (filas de la base)
+ * @param {number|null} focoId El producto que ya tiene la charla
+ * @returns {object|null}
+ */
+export function productoDelMonto(texto, productos, focoId = null) {
+  if (!pareceEleccion(texto, { maxPalabras: 8 })) return null;
+  const monedas = new Set(productos.map(p => p.currency || 'PYG'));
+  if (monedas.size !== 1) return null;
+
+  const ignorar = [...productos.map(p => p.name).join(' ').matchAll(/\d+/g)].map(m => Number(m[0]));
+  const palabras = palabrasDe(texto);
+  const montos = montosDelTexto(texto, { moneda: [...monedas][0], ignorar })
+    .filter(m => !negadoAntes(palabras, m.posicion))
+    .map(m => m.monto);
+  if (montos.length !== 1) return null;
+  const monto = montos[0];
+
+  const foco = productos.find(p => Number(p.id) === Number(focoId));
+  if (foco && preciosDe(foco).includes(monto)) return null;
+
+  const candidatos = productos.filter(p => Number(p.id) !== Number(focoId) && Number(p.price) === monto);
+  return candidatos.length === 1 ? candidatos[0] : null;
+}
+
+/**
+ * Qué versión eligió, si el producto tiene un extra y lo que escribió elige
+ * una: "el de 35", "quiero el plus", "solo el plan". Ver intencion-extra.js.
+ *
+ * No elige nada (null) cuando:
+ *   - el producto no tiene un extra que se pueda vender hoy;
+ *   - todavía no se le presentó el producto: primero va la presentación;
+ *   - ya mandó un comprobante o ya pagó: cambiar de versión cambiaría lo que pagó;
+ *   - ya está en esa versión y ya tiene los datos: repetírselos no suma nada.
+ *
+ * @returns {Promise<{ intencion: string|null, motivo: string }|null>}
+ */
+export async function intencionDe({ conversationId, producto, texto }) {
+  const { bump } = normalizarBump(producto?.bump);
+  if (!bump.activo || !bump.product_id || !bump.precio) return null;
+  if (Number(bump.product_id) === Number(producto.id)) return null;
+
+  const pedido = await orderRepository.findByConversationAndProduct(conversationId, producto.id);
+  if (!pedido || posicionEtapa(pedido.etapa) <= posicionEtapa('entro')) return { intencion: null, motivo: 'sin_presentar' };
+  if (pedido.status !== 'interesado') return { intencion: null, motivo: 'pedido_en_curso' };
+
+  const extra = await productRepository.findById(bump.product_id);
+  if (!extra || extra.is_active === false || !linksDe(extra).length) return null;
+
+  const lista = Number(producto.price) || 0;
+  let precio = lista;
+  try {
+    const pp = await precioParaPersona({ conversationId, productId: producto.id, precioLista: lista, momentos: [Date.now()] });
+    precio = Number(pp.precio) || lista;
+  } catch {
+    // Sin ofertas legibles, el de lista.
+  }
+
+  const bumpAt = pedido.bump_at ? new Date(pedido.bump_at).getTime() : 0;
+  const r = intencionExtra(texto, {
+    precio,
+    lista,
+    precioExtra: bump.precio,
+    moneda: producto.currency || 'PYG',
+    nombreProducto: producto.name,
+    nombreExtra: extra.name,
+    botonSi: bump.boton_si,
+    bumpEstado: pedido.bump_estado || null,
+    ofrecidoReciente: Boolean(bumpAt) && Date.now() - bumpAt < VENTANA_RESPUESTA_MS
+  });
+  if (!r.intencion) return r;
+
+  const yaTieneDatos = posicionEtapa(pedido.etapa) >= posicionEtapa('recibio_datos');
+  if (yaTieneDatos) {
+    if (r.intencion === 'comprar') return { intencion: null, motivo: 'ya_tiene_datos' };
+    if (r.intencion === 'extra_si' && pedido.bump_estado === 'aceptado') return { intencion: null, motivo: 'ya_estaba' };
+    if (r.intencion === 'extra_no' && pedido.bump_estado !== 'aceptado') return { intencion: null, motivo: 'ya_estaba' };
+  }
+  return r;
+}
+
 /** Hasta 24 letras para el título de una opción de lista de WhatsApp. */
 export function nombreCorto(nombre, max = 24) {
   const base = String(nombre || '').split(/\s+[—–-]\s+|\s*\(/)[0].trim() || String(nombre || '').trim();
@@ -208,11 +322,33 @@ function armarPregunta(productos, { saludo = 'Hola', nombre = '', esImagen = fal
 }
 
 /**
+ * De qué producto se habla y, si el producto tiene un extra, qué versión
+ * eligió con lo que escribió (`intencion`: extra_si, extra_no, comprar o null).
+ *
  * @param {{ conversationId:number, texto?:string, botonId?:string, esImagen?:boolean,
  *           saludo?:string, nombre?:string }} p
- * @returns {Promise<{ product_id:number|null, origen:string, elegir:boolean, pregunta?:object, cantidad:number }>}
+ * @returns {Promise<{ product_id:number|null, origen:string, elegir:boolean, pregunta?:object,
+ *           cantidad:number, intencion?:string|null, intencion_motivo?:string }>}
  */
-export async function resolverProducto({ conversationId, texto = '', botonId = '', esImagen = false, saludo, nombre }) {
+export async function resolverProducto(p) {
+  const r = await resolverSoloProducto(p);
+  // Un botón ya dice lo que eligió, y una imagen no tiene texto.
+  if (!r.product_id || p.esImagen || p.botonId || !String(p.texto || '').trim()) return r;
+  try {
+    const producto = await productRepository.findById(r.product_id);
+    const i = producto ? await intencionDe({ conversationId: p.conversationId, producto, texto: p.texto }) : null;
+    if (i) {
+      r.intencion = i.intencion;
+      r.intencion_motivo = i.motivo;
+    }
+  } catch (err) {
+    // Si no se puede leer la elección, la charla sigue como antes: la IA contesta.
+    console.warn(`[producto-foco] No se pudo leer qué versión eligió: ${err.message}`);
+  }
+  return r;
+}
+
+async function resolverSoloProducto({ conversationId, texto = '', botonId = '', esImagen = false, saludo, nombre }) {
   const { rows } = await query(
     `SELECT c.id, c.producto_foco_id, ch.team_id
        FROM conversations c LEFT JOIN channels ch ON ch.id = c.channel_id
@@ -235,6 +371,10 @@ export async function resolverProducto({ conversationId, texto = '', botonId = '
   if (!esImagen) {
     const delTexto = productoDelTexto(texto, productos);
     if (delTexto) return listo(delTexto.id, 'texto');
+
+    // "el de 19" en una charla del de 25: el que cuesta eso.
+    const delMonto = productoDelMonto(texto, productos, conv.producto_foco_id);
+    if (delMonto) return listo(delMonto.id, 'monto');
   }
 
   if (conv.producto_foco_id && existe(conv.producto_foco_id)) {
@@ -263,4 +403,4 @@ export async function resolverProducto({ conversationId, texto = '', botonId = '
   };
 }
 
-export default { resolverProducto, productoDelTexto, productoDelBoton, nombreCorto, nombrePila };
+export default { resolverProducto, intencionDe, productoDelTexto, productoDelMonto, productoDelBoton, nombreCorto, nombrePila };
