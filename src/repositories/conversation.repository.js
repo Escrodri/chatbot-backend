@@ -428,7 +428,8 @@ export const conversationRepository = {
              ctwa_clid = NULL,
              source_ad_id = NULL,
              source_type = NULL,
-             source_url = NULL
+             source_url = NULL,
+              producto_foco_id = NULL
          WHERE id = $1
          RETURNING id
        )

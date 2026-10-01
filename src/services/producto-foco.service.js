@@ -48,24 +48,61 @@ function normalizar(t) {
 
 function palabrasClave(p) {
   const base = normalizar(`${p.name} ${(p.slug || '').split('-').join(' ')}`);
-  return [...new Set(base.split(' ').filter(w => w.length > 3 && !COMUNES.has(w)))];
+  return [...new Set(base.split(' ').filter(w => (w.length >= 3 || /^\d+$/.test(w)) && !COMUNES.has(w)))];
+}
+
+function coincideSaludo(texto, saludo) {
+  const t = ` ${normalizar(texto)} `;
+  const s = normalizar(saludo);
+  if (!s || s.length < 4) return false;
+  if (t.includes(` ${s} `)) return true;
+  const claves = s.split(' ').filter(w => (w.length >= 3 || /^\d+$/.test(w)) && !COMUNES.has(w));
+  if (claves.length === 0) return false;
+  const aciertos = claves.filter(w => t.includes(` ${w} `)).length;
+  return aciertos >= Math.min(2, claves.length);
 }
 
 /**
  * El producto que nombra el texto, si nombra a uno solo sin dudas.
- * Hace falta que coincidan al menos dos palabras propias del nombre (o todas,
- * si tiene una sola), y que ningún otro producto empate.
+ *
+ * 1. Primero busca coincidencia con el saludo o frases del anuncio configuradas en el producto.
+ * 2. Si no, busca palabras clave del nombre y slug (si una palabra es exclusiva de un producto, 1 acierto alcanza).
  */
 export function productoDelTexto(texto, productos) {
-  const t = ` ${normalizar(texto)} `;
-  if (t.trim().length < 3) return null;
+  const tLimpio = normalizar(texto);
+  if (tLimpio.length < 3) return null;
 
+  // 1. Coincidencia por saludo o frases de anuncio configuradas
+  for (const p of productos) {
+    const saludo = p.mensajes?.saludo_anuncio;
+    if (saludo && coincideSaludo(texto, saludo)) {
+      return p;
+    }
+    const frases = String(p.mensajes?.frases_anuncio || '')
+      .split(/[\n,]+/)
+      .map(normalizar)
+      .filter(f => f.length >= 3);
+    for (const f of frases) {
+      if (` ${tLimpio} `.includes(` ${f} `)) {
+        return p;
+      }
+    }
+  }
+
+  // 2. Coincidencia por palabras clave del nombre / slug
+  const t = ` ${tLimpio} `;
   const puntajes = productos.map(p => {
     const claves = palabrasClave(p);
     const acierto = claves.filter(w => t.includes(` ${w} `)).length;
     const nombreEntero = normalizar(p.name).length > 6 && t.includes(` ${normalizar(p.name)} `);
-    const minimo = Math.min(2, claves.length || 1);
-    return { p, acierto, ok: nombreEntero || (claves.length > 0 && acierto >= minimo), extra: nombreEntero ? 100 : 0 };
+    const tieneExclusiva = claves.some(w => t.includes(` ${w} `) && !productos.some(otro => otro.id !== p.id && palabrasClave(otro).includes(w)));
+    const minimo = tieneExclusiva ? 1 : Math.min(2, claves.length || 1);
+    return {
+      p,
+      acierto,
+      ok: nombreEntero || (claves.length > 0 && acierto >= minimo),
+      extra: nombreEntero ? 100 : (tieneExclusiva ? 50 : 0)
+    };
   }).filter(x => x.ok).sort((a, b) => (b.acierto + b.extra) - (a.acierto + a.extra));
 
   if (!puntajes.length) return null;
@@ -151,7 +188,7 @@ function armarPregunta(productos, { saludo = 'Hola', nombre = '', esImagen = fal
   if (productos.length <= 3) {
     return {
       text: texto,
-      buttons: productos.map(p => ({ id: `prod:${p.id}`, title: nombreCorto(p.name, 20) }))
+      buttons: productos.map(p => ({ id: `prod:${p.id}`, title: nombreCorto(p.mensajes?.nombre_corto || p.name, 20) }))
     };
   }
   return {
@@ -160,7 +197,7 @@ function armarPregunta(productos, { saludo = 'Hola', nombre = '', esImagen = fal
       boton: 'Ver materiales',
       opciones: productos.slice(0, 10).map(p => ({
         id: `prod:${p.id}`,
-        title: nombreCorto(p.name, 24),
+        title: nombreCorto(p.mensajes?.nombre_corto || p.name, 24),
         description: `${formatearMonto(p.price, p.currency)} · ${p.name}`.slice(0, 72)
       }))
     }

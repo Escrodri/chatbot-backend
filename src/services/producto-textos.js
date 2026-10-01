@@ -134,6 +134,8 @@ export function normalizarMensajes(entrada) {
   const textosSeg = seg.textos && typeof seg.textos === 'object' ? seg.textos : {};
 
   const mensajes = {
+    saludo_anuncio: texto(e.saludo_anuncio),
+    frases_anuncio: texto(e.frases_anuncio),
     presentacion: presentacion.slice(0, LIMITES.partes),
     boton_comprar: texto(e.boton_comprar),
     boton_muestras: texto(e.boton_muestras),
