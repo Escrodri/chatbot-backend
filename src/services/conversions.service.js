@@ -52,10 +52,54 @@ export const conversionsService = {
 
     // Orden de precedencia: lo que el canal tenga cargado en Configuración,
     // después lo definido por plataforma, y al final lo general.
+    // En WhatsApp, si no hay un token propio para conversiones, sirve el del
+    // canal: el conjunto de datos se pide con ese mismo token (ver
+    // `conectarDatasetWhatsApp`), así que tiene acceso a él.
+    const delCanal = plataforma === 'whatsapp' ? (canal?.accessToken || canal?.access_token || '') : '';
+
     return {
       datasetId: canal?.dataset_id || porPlataforma.datasetId || general.datasetId || '',
-      accessToken: canal?.conversionsToken || porPlataforma.accessToken || general.accessToken || ''
+      accessToken: canal?.conversionsToken || porPlataforma.accessToken || general.accessToken || delCanal
     };
+  },
+
+  /**
+   * El conjunto de datos que Meta ata a la cuenta de WhatsApp Business del canal.
+   *
+   * Las ventas de un anuncio de clic a WhatsApp no van a un píxel cualquiera:
+   * van al conjunto de datos de esa cuenta. Meta lo da con
+   * `GET /{waba_id}/dataset`, y si todavía no existe lo crea con un POST al
+   * mismo lugar. Las dos cosas se hacen con el token del canal, así que nadie
+   * tiene que copiar ni pegar nada.
+   *
+   * @param {object} canal Canal descifrado (con accessToken y waba_id)
+   * @returns {Promise<{ ok: boolean, datasetId?: string, creado?: boolean, error?: string }>}
+   */
+  async conectarDatasetWhatsApp(canal) {
+    const token = canal?.accessToken || canal?.access_token;
+    if (!canal?.waba_id) {
+      return { ok: false, error: 'Todavía no conocemos la cuenta de WhatsApp Business de este número. Se guarda sola con el próximo mensaje que entre.' };
+    }
+    if (!token) return { ok: false, error: 'El canal no tiene token de Meta.' };
+
+    const apiVersion = config.meta.apiVersion || 'v26.0';
+    const url = `${API_BASE}/${apiVersion}/${canal.waba_id}/dataset`;
+    const idDe = (d) => d?.id || d?.dataset_id || d?.data?.[0]?.id || null;
+
+    try {
+      const r1 = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const d1 = await r1.json().catch(() => ({}));
+      if (r1.ok && idDe(d1)) return { ok: true, datasetId: String(idDe(d1)), creado: false };
+
+      const r2 = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+      const d2 = await r2.json().catch(() => ({}));
+      if (r2.ok && idDe(d2)) return { ok: true, datasetId: String(idDe(d2)), creado: true };
+
+      const err = d2.error || d1.error || {};
+      return { ok: false, error: `Meta no dio el conjunto de datos: ${err.message || `HTTP ${r2.status}`}`, code: err.code };
+    } catch (e) {
+      return { ok: false, error: `No se pudo contactar a Meta: ${e.message}` };
+    }
   },
 
   /**

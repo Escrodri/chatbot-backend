@@ -13,6 +13,8 @@ settingsRouter.get('/channels', settingsController.getChannels);
 settingsRouter.post('/channels', settingsController.createChannel);
 settingsRouter.put('/channels/:id', settingsController.updateChannel);
 settingsRouter.post('/channels/:id/test', settingsController.testChannel);
+settingsRouter.post('/channels/:id/conversiones', settingsController.conectarConversiones);
+settingsRouter.post('/channels/:id/registrar', settingsController.registrarNumero);
 settingsRouter.delete('/channels/:id', settingsController.deleteChannel);
 settingsRouter.post('/channels/scan-facebook-pages', settingsController.scanFacebookPages);
 settingsRouter.post('/channels/connect-facebook-pages', settingsController.connectFacebookPages);

@@ -10,6 +10,7 @@ import { userRepository } from '../repositories/user.repository.js';
 import { autoReviewService } from '../services/auto-review.service.js';
 import { datosPagoService } from '../services/datos-pago.service.js';
 import { idDeMensaje, formatoGs } from '../utils/comprobante.util.js';
+import { eventosPedidoService } from '../services/eventos-pedido.service.js';
 import { revisionComprobanteService } from '../services/revision-comprobante.service.js';
 
 // Las funciones que leen un comprobante —el monto, la huella, la antigüedad,
@@ -388,6 +389,12 @@ export const orderController = {
       }
 
       if (!actualizado) return res.status(404).json({ error: 'Pedido no encontrado' });
+
+      // Pago confirmado a mano: la compra va a Meta igual que la automática.
+      // Si ya se había informado, no se cuenta de nuevo.
+      if (status === 'pagado') {
+        eventosPedidoService.avisar(actualizado.id, 'compra', { registradoPor: esServicio ? null : req.user?.id || null });
+      }
 
       let entrega = null;
       let estadoFinal = actualizado;

@@ -9,6 +9,7 @@ import { datosPagoService } from './datos-pago.service.js';
 import { socketManager } from '../sockets/index.js';
 import { horaEnParaguay } from '../config/env.config.js';
 import { precioParaPersona } from './precio.service.js';
+import { eventosPedidoService } from './eventos-pedido.service.js';
 import {
   LIMITES,
   VARIABLES,
@@ -585,6 +586,8 @@ export const mensajesProductoService = {
 
     if (resultados[0].ok) {
       await orderRepository.marcarEtapa(pedido.id, 'recibio_datos').catch(() => {});
+      // A Meta: empezó a pagar, con el total que se le pidió. Una vez por pedido.
+      eventosPedidoService.avisar(pedido.id, 'checkout', { valor: total });
     }
 
     return respuesta(paso, producto, resultados, {

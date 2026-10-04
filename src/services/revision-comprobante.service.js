@@ -18,6 +18,7 @@ import {
   nombreDestinoParaMostrar
 } from '../utils/comprobante.util.js';
 import { respuestaPara, respuestaRepetido, describirParaIA } from './respuestas-comprobante.js';
+import { eventosPedidoService } from './eventos-pedido.service.js';
 import { precioParaPersona, describirPrecio, fechaParaguay } from './precio.service.js';
 
 /**
@@ -546,6 +547,9 @@ async function evaluar(orderId, entrada) {
   await orderRepository
     .anotarPrecioCobrado(id, { precio, origen: origenPrecio, campanaId: precioPersona.campana_id })
     .catch(err => console.warn('⚠️ [PRECIO] No se pudo anotar el precio cobrado:', err.message));
+
+  // La compra, a Meta: con el precio cobrado más los extras. No demora la entrega.
+  eventosPedidoService.avisar(id, 'compra');
 
   const entrega = await deliveryService.entregar(pedido, null);
 

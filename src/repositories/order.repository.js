@@ -460,6 +460,7 @@ export const orderRepository = {
               o.contact_phone, o.amount, o.currency,
               COALESCE(o.recuperacion_nivel, 0) AS recuperacion_nivel,
               o.recuperacion_at,
+              o.bump_estado,
               GREATEST(o.etapa_at, c.last_customer_interaction) AS referencia,
               EXTRACT(EPOCH FROM (
                 CURRENT_TIMESTAMP - GREATEST(o.etapa_at, c.last_customer_interaction)

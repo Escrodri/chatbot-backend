@@ -1,4 +1,5 @@
 import { orderRepository } from '../repositories/order.repository.js';
+import { pedidoItemRepository } from '../repositories/pedido-item.repository.js';
 import { conversationRepository } from '../repositories/conversation.repository.js';
 import { channelRepository } from '../repositories/channel.repository.js';
 import { messageRepository } from '../repositories/message.repository.js';
@@ -35,6 +36,7 @@ export const DEFAULT_MENSAJES_RECUPERACION = Object.freeze({
   nivel_1_decidido: '¡Hola, {{nombre}}! 🤍\nTe escribo por si se complicó algo con la transferencia. ¿Querés que te pase de nuevo los datos?\n\nApenas me mandes la captura del comprobante, te llega {{producto}} por este mismo chat 🙌🏻',
   nivel_1_mirando: '¡Hola, {{nombre}}! 🤍\n¿Pudiste ver bien {{producto}}? Si te quedó alguna duda, preguntame lo que quieras.\n\nY si ya lo querés, decime y te paso los datos 🙌🏻',
   nivel_2_decidido: '¡Hola, {{nombre}}! 🤍\nSi lo que te frenó fue el monto, te lo puedo dejar en {{precio}}. Ese precio te lo mantengo hasta el {{vence}}.\n\n¿Te paso los datos? 📲',
+  nivel_2_extra: '¡Hola, {{nombre}}! 🤍\nVi que te interesaba el plan con el pack extra. Si el total se te hizo un poco pesado para arrancar, no te preocupes: podés empezar con {{producto}} solo y te lo dejo en {{precio}} hasta el {{vence}}.\n\n¿Te paso los datos para arrancar con ese? 🙌🏻',
   nivel_2_mirando: '¡Hola, {{nombre}}! 🤍\nTe quería hacer una propuesta: {{producto}} te lo dejo en {{precio}}, y ese precio te lo mantengo hasta el {{vence}}.\n\n¿Te interesa? Decime y te paso los datos 🙌🏻',
   nivel_2_sin_descuento: '¡Hola, {{nombre}}! 🤍\n¿Seguís con ganas de {{producto}}? Si hay algo que te frena, contame y lo vemos.\n\nSi ya lo querés, decime y te paso los datos 🙌🏻',
   nivel_3: '¡Hola, {{nombre}}! 🤍\nNo quiero insistir de más, así que te dejo esto simple: si todavía querés {{producto}}, te lo dejo en {{precio}} hasta el {{vence}} y te paso los datos ahora mismo.\n\nY si no era para vos, todo bien igual. Acá quedo si algún día lo necesitás.',
@@ -278,9 +280,13 @@ export const recoveryService = {
     if (nivel === 1) {
       plantilla = cual === 'decidido' ? cfg.nivel_1_decidido : cfg.nivel_1_mirando;
     } else if (nivel === 2) {
-      plantilla = !conDescuento
-        ? cfg.nivel_2_sin_descuento
-        : (cual === 'decidido' ? cfg.nivel_2_decidido : cfg.nivel_2_mirando);
+      if (!conDescuento) {
+        plantilla = cfg.nivel_2_sin_descuento;
+      } else if (candidato.bump_estado === 'aceptado') {
+        plantilla = cfg.nivel_2_extra || cfg.nivel_2_decidido;
+      } else {
+        plantilla = cual === 'decidido' ? cfg.nivel_2_decidido : cfg.nivel_2_mirando;
+      }
     } else {
       plantilla = conDescuento ? cfg.nivel_3 : cfg.nivel_3_sin_descuento;
     }
@@ -577,6 +583,14 @@ export const recoveryService = {
               precio: rebajado,
               nivel
             });
+
+            // Si tenía el extra aceptado y le ofrecimos arrancar solo con el producto base,
+            // desvinculamos el extra para que si responde "dale/sí" el bot no le cobre el extra encima.
+            // Si el cliente pide expresamente el extra después, intencionExtra lo vuelve a sumar.
+            if (candidato.bump_estado === 'aceptado') {
+              await pedidoItemRepository.quitarExtras(candidato.id).catch(() => {});
+              await orderRepository.marcarBump(candidato.id, 'rechazado').catch(() => {});
+            }
           }
         } else {
           balance.fallidos++;

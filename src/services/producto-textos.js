@@ -67,6 +67,7 @@ export const CLAVES_SEGUIMIENTO = Object.freeze([
   'nivel_1_mirando',
   'nivel_2_decidido',
   'nivel_2_mirando',
+  'nivel_2_extra',
   'nivel_2_sin_descuento',
   'nivel_3',
   'nivel_3_sin_descuento'

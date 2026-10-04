@@ -6,6 +6,7 @@ import { logRepository } from '../repositories/log.repository.js';
 import { teamRepository } from '../repositories/team.repository.js';
 import envConfig from '../config/env.config.js';
 import { recoveryService } from '../services/recovery.service.js';
+import { conversionsService } from '../services/conversions.service.js';
 
 export const settingsController = {
   // ==========================================
@@ -168,6 +169,83 @@ export const settingsController = {
    * Prueba la validez del token y conectividad con Meta Graph API en vivo.
    * Si es exitoso, limpia error_message y restablece el canal a 'active'.
    */
+  /**
+   * Conecta el canal de WhatsApp a la API de Conversiones: le pide a Meta el
+   * conjunto de datos de su cuenta de WhatsApp Business (o lo crea) y lo
+   * guarda en el canal. Desde ahí las compras y los inicios de pago se
+   * informan solos, con el token del canal.
+   *
+   * POST /api/settings/channels/:id/conversiones
+   */
+  async conectarConversiones(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'ID de canal inválido' });
+
+      const channel = await channelRepository.findById(id);
+      if (!channel) return res.status(404).json({ error: 'Canal no encontrado' });
+      if (req.user.role !== 'superadmin' && req.user.team_id && channel.team_id !== req.user.team_id) {
+        return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+      }
+      if (channel.platform !== 'whatsapp') {
+        return res.status(400).json({ error: 'Esta conexión automática es para números de WhatsApp. En Messenger e Instagram cargá el píxel a mano en Editar.' });
+      }
+
+      const r = await conversionsService.conectarDatasetWhatsApp(channel);
+      if (!r.ok) return res.status(502).json({ error: r.error, code: r.code });
+
+      await channelRepository.update(id, { datasetId: r.datasetId });
+      return res.json({
+        success: true,
+        dataset_id: r.datasetId,
+        creado: Boolean(r.creado),
+        message: r.creado
+          ? `Listo: Meta creó el conjunto de datos ${r.datasetId} para este número y quedó conectado.`
+          : `Listo: el número quedó conectado al conjunto de datos ${r.datasetId}.`
+      });
+    } catch (error) {
+      return res.status(500).json({ error: 'No se pudo conectar la API de Conversiones: ' + error.message });
+    }
+  },
+
+  /**
+   * Vuelve a registrar el número en la API de WhatsApp. Hace falta, por
+   * ejemplo, para que Meta aplique un nombre visible recién aprobado.
+   * Pide el PIN de la verificación en dos pasos del número; no se guarda.
+   *
+   * POST /api/settings/channels/:id/registrar  { pin }
+   */
+  async registrarNumero(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'ID de canal inválido' });
+      const pin = String(req.body?.pin || '').trim();
+      if (!/^\d{6}$/.test(pin)) return res.status(400).json({ error: 'El PIN son 6 números.' });
+
+      const channel = await channelRepository.findById(id);
+      if (!channel) return res.status(404).json({ error: 'Canal no encontrado' });
+      if (req.user.role !== 'superadmin' && req.user.team_id && channel.team_id !== req.user.team_id) {
+        return res.status(403).json({ error: 'Acceso no autorizado a este canal' });
+      }
+      if (channel.platform !== 'whatsapp') return res.status(400).json({ error: 'Solo los números de WhatsApp se registran.' });
+
+      const apiVersion = envConfig.meta.apiVersion || 'v26.0';
+      const r = await fetch(`https://graph.facebook.com/${apiVersion}/${channel.channel_identifier}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${channel.access_token}` },
+        body: JSON.stringify({ messaging_product: 'whatsapp', pin })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.error) {
+        const msg = d.error?.error_user_msg || d.error?.message || `HTTP ${r.status}`;
+        return res.status(502).json({ error: `Meta no registró el número: ${msg}`, code: d.error?.code });
+      }
+      return res.json({ success: true, message: 'Número registrado de nuevo. El nombre visible aprobado puede tardar unos minutos en verse.' });
+    } catch (error) {
+      return res.status(500).json({ error: 'No se pudo registrar el número: ' + error.message });
+    }
+  },
+
   async testChannel(req, res) {
     try {
       const id = parseInt(req.params.id, 10);

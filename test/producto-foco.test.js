@@ -91,3 +91,18 @@ test('normalizarMensajes: valida límite de 20 caracteres en nombre_corto', () =
   const { errores } = normalizarMensajes(input);
   assert.ok(errores.some(e => e.includes('nombre corto para botones')));
 });
+
+test('normalizarMensajes: acepta nivel_2_extra con variables válidas en seguimiento', () => {
+  const input = {
+    seguimiento: {
+      textos: {
+        nivel_2_extra: 'Hola {{nombre}}, te dejo {{producto}} en {{precio}} hasta {{vence}}'
+      }
+    }
+  };
+
+  const { mensajes, errores } = normalizarMensajes(input);
+  assert.strictEqual(errores.length, 0);
+  assert.strictEqual(mensajes.seguimiento.textos.nivel_2_extra, 'Hola {{nombre}}, te dejo {{producto}} en {{precio}} hasta {{vence}}');
+});
+
