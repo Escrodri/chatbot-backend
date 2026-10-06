@@ -364,6 +364,15 @@ export const graphApiService = {
         messagePayload = { text: effectiveText };
       }
 
+      const botonesValidos = normalizarBotones(buttons);
+      if (botonesValidos.length > 0 && messagePayload.text) {
+        messagePayload.quick_replies = botonesValidos.map(b => ({
+          content_type: 'text',
+          title: b.title.slice(0, 20),
+          payload: b.id
+        }));
+      }
+
       const payload = {
         recipient: { id: recipientId },
         message: messagePayload

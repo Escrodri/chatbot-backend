@@ -255,6 +255,8 @@ export const normalizerService = {
             // de clic a Messenger o desde un enlace m.me con referencia.
             const ref = item.referral || item.postback?.referral || null;
 
+            const botonId = msg.quick_reply?.payload || null;
+
             events.push({
               platform,
               channelIdentifier: String(channelId),
@@ -282,7 +284,49 @@ export const normalizerService = {
                 timestamp: eventDate,
                 type: contentType,
                 text: textContent,
-                mediaUrl
+                mediaUrl,
+                botonId
+              }
+            });
+          }
+
+          // A.3. Postback (toque de botón o botón "Empezar" de Messenger)
+          if (!item.message && item.postback) {
+            const pb = item.postback;
+            const customerId = item.sender?.id;
+            const channelId = item.recipient?.id || pageId;
+            const eventDate = item.timestamp ? new Date(item.timestamp) : new Date();
+            const ref = pb.referral || null;
+
+            events.push({
+              platform,
+              channelIdentifier: String(channelId),
+              eventType: 'message',
+              isEcho: false,
+              attribution: ref ? {
+                ctwaClid: ref.ctwa_clid || null,
+                adId: ref.ad_id || null,
+                adsetId: ref.adset_id || ref.ads_context_data?.adset_id || null,
+                sourceType: ref.source || ref.type || null,
+                sourceUrl: ref.ref || null,
+                titulo: ref.ads_context_data?.ad_title || null,
+                texto: null
+              } : null,
+              accountId: String(pageId || channelId),
+              sender: {
+                id: String(customerId),
+                name: `Usuario ${String(customerId).slice(-4)}`,
+                phone: null
+              },
+              message: {
+                id: `pb_${pb.mid || Date.now()}_${customerId}`,
+                direction: 'inbound',
+                senderType: 'customer',
+                timestamp: eventDate,
+                type: 'text',
+                text: pb.title || pb.payload || '[Botón]',
+                mediaUrl: null,
+                botonId: pb.payload || null
               }
             });
           }
