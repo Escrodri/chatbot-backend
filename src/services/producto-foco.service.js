@@ -332,6 +332,15 @@ function armarPregunta(productos, { saludo = 'Hola', nombre = '', esImagen = fal
  */
 export async function resolverProducto(p) {
   const r = await resolverSoloProducto(p);
+  if (r.product_id) {
+    try {
+      r.ya_pagado = await yaPagado(p.conversationId, r.product_id);
+    } catch {
+      r.ya_pagado = false;
+    }
+  } else {
+    r.ya_pagado = false;
+  }
   // Un botón ya dice lo que eligió, y una imagen no tiene texto.
   if (!r.product_id || p.esImagen || p.botonId || !String(p.texto || '').trim()) return r;
   try {

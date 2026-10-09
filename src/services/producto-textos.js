@@ -77,6 +77,19 @@ function texto(valor) {
   return String(valor ?? '').replace(/\r\n/g, '\n').trim();
 }
 
+/**
+ * Parte un texto en sus redacciones alternativas.
+ *
+ * Una línea que tenga solo tres o más guiones (---) separa una redacción de la
+ * siguiente para rotar mensajes de remarketing y evitar envíos repetitivos / spam.
+ */
+export function separarRedacciones(texto) {
+  return String(texto || '')
+    .split(/\r?\n[ \t]*-{3,}[ \t]*\r?\n/)
+    .map(t => t.trim())
+    .filter(Boolean);
+}
+
 /** Las {{variables}} que usa un texto y que ese paso no conoce. */
 export function variablesDesconocidas(plantilla, paso) {
   const permitidas = VARIABLES_POR_PASO[paso] || [];
@@ -182,8 +195,9 @@ export function normalizarMensajes(entrada) {
     errores.push(`La guía para la IA tiene ${mensajes.guia_ia.length} caracteres y el máximo es ${LIMITES.guia}. Dejá lo que más cambia la venta.`);
   }
   for (const k of CLAVES_SEGUIMIENTO) {
-    if (mensajes.seguimiento.textos[k].length > LIMITES.texto) {
-      errores.push(`Un mensaje de seguimiento pasa de ${LIMITES.texto} caracteres.`);
+    const redacciones = separarRedacciones(mensajes.seguimiento.textos[k]);
+    if (redacciones.some(r => r.length > LIMITES.texto)) {
+      errores.push(`Una redacción de seguimiento pasa de ${LIMITES.texto} caracteres.`);
       break;
     }
   }
@@ -301,6 +315,7 @@ export default {
   CLAVES_SEGUIMIENTO,
   renderizar,
   variablesDesconocidas,
+  separarRedacciones,
   normalizarMensajes,
   normalizarBump,
   normalizarEntregables,

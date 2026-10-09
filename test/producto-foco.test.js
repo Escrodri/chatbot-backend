@@ -106,3 +106,21 @@ test('normalizarMensajes: acepta nivel_2_extra con variables válidas en seguimi
   assert.strictEqual(mensajes.seguimiento.textos.nivel_2_extra, 'Hola {{nombre}}, te dejo {{producto}} en {{precio}} hasta {{vence}}');
 });
 
+test('normalizarMensajes y separarRedacciones: valida opciones alternativas de seguimiento separadas por ---', () => {
+  const opcion1 = 'Hola {{nombre}}, ¿cómo estás? Te dejo {{producto}} en {{precio}} hasta {{vence}}.'.repeat(35); // ~2600 chars
+  const opcion2 = '¡Buenas {{nombre}}! Seguís interesado en {{producto}} por {{precio}} hasta {{vence}}?'.repeat(30); // ~2500 chars
+  // En total superan 5000 chars, pero cada una mide menos de 4096 (límite de WhatsApp)
+  const textoCombinado = `${opcion1}\n\n---\n\n${opcion2}`;
+
+  const input = {
+    seguimiento: {
+      textos: {
+        nivel_1_decidido: textoCombinado
+      }
+    }
+  };
+
+  const { errores } = normalizarMensajes(input);
+  assert.strictEqual(errores.length, 0, 'No debe fallar si cada variante individual no supera 4096');
+});
+

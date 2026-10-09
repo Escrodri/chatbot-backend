@@ -46,6 +46,68 @@ export const DEFAULT_MENSAJES_RECUPERACION = Object.freeze({
 export const CLAVES_MENSAJES = Object.freeze(Object.keys(DEFAULT_MENSAJES_RECUPERACION));
 
 /**
+ * Redacciones alternativas de cada seguimiento.
+ *
+ * Mandar a decenas de personas el mismo texto, letra por letra, es lo primero
+ * que Meta mira para decidir si algo es un envío masivo. Cada seguimiento
+ * tiene acá otras redacciones, y al mandar se elige una (nunca la misma dos
+ * veces seguidas). El texto cargado en el producto o en los ajustes cuenta
+ * como una más.
+ *
+ * Valen las mismas reglas de los textos base: nada de cupos ni lugares para un
+ * PDF, "{{vence}}" y no "hoy", y solo se habla de precio especial en los
+ * seguimientos "con descuento". Las variables posibles son {{nombre}},
+ * {{producto}}, {{precio}}, {{vence}} y {{moneda}}. El saludo con nombre va
+ * siempre como "¡Hola, {{nombre}}!" u "Hola {{nombre}}" para que sin nombre
+ * quede "¡Hola!" y no una coma colgada.
+ *
+ * Quien cargue textos propios con varias redacciones (separadas por una línea
+ * con ---) las controla por completo: en ese caso estas no se agregan.
+ */
+export const VARIANTES_RECUPERACION = Object.freeze({
+  nivel_1_decidido: Object.freeze([
+    '¡Hola, {{nombre}}! 😊\nVi que quedaste a mitad de camino con el pago. Si algo no te cerró o te trabaste con los datos, decime y lo resolvemos juntos.\n\nCuando me mandes el comprobante, {{producto}} te llega por acá mismo 🙌🏻',
+    'Hola {{nombre}} 👋\n¿Pudiste hacer la transferencia o se te complicó algo? Si querés, te vuelvo a pasar los datos para que te resulte más fácil.\n\nEn cuanto llegue tu comprobante, {{producto}} te llega por este chat.',
+    '¡Hola, {{nombre}}! 🤍\nPasaba a ver si necesitabas una mano con el pago. Cualquier duda con los datos, preguntame sin problema.\n\nApenas confirmes la transferencia con una captura, recibís {{producto}} por este mismo chat 🙌🏻'
+  ]),
+  nivel_1_mirando: Object.freeze([
+    'Hola {{nombre}} 👋\n¿Pudiste ver con calma lo que te conté de {{producto}}? Si te quedó alguna duda, escribime y te ayudo.\n\nSi ya querés tenerlo, decime y te paso los datos 🙌🏻',
+    '¡Hola, {{nombre}}! 😊\nTe escribo por si querés que te aclare algo de {{producto}} antes de decidir. Preguntame lo que necesites.\n\nCuando quieras avanzar, avisame y te cuento cómo hacerlo 🤍',
+    '¡Hola, {{nombre}}! 🤍\nPasé por acá por si {{producto}} te quedó dando vueltas. Si tenés dudas, con gusto te las respondo.\n\nSi ya lo querés, decime y te mando los datos.'
+  ]),
+  nivel_2_decidido: Object.freeze([
+    'Hola {{nombre}} 👋\nPor si el monto fue lo que te frenó: {{producto}} te lo puedo dejar en {{precio}}, válido hasta el {{vence}}.\n\n¿Querés que te pase los datos? 📲',
+    '¡Hola, {{nombre}}! 😊\nTe cuento que puedo hacerte un precio especial de {{precio}} por {{producto}}, hasta el {{vence}}.\n\nSi te sirve, decime y te paso los datos 🙌🏻',
+    '¡Hola, {{nombre}}! 🤍\nQuería avisarte que {{producto}} te queda en {{precio}} hasta el {{vence}}. Si era el precio lo que te hizo dudar, ahora puede cerrarte mejor.\n\n¿Te mando los datos?'
+  ]),
+  nivel_2_extra: Object.freeze([
+    'Hola {{nombre}} 👋\nVi que te interesaba el plan con el pack extra. Si el total te pareció alto para arrancar, podés empezar solo con {{producto}} por {{precio}}, hasta el {{vence}}.\n\n¿Querés que te pase los datos con esa opción? 🙌🏻',
+    '¡Hola, {{nombre}}! 😊\nSi el total con el pack extra se te hizo mucho para empezar, no hay problema: {{producto}} solo te queda en {{precio}} hasta el {{vence}}.\n\n¿Te paso los datos para ese? 📲',
+    '¡Hola, {{nombre}}! 🤍\nSobre el plan con el extra: si preferís arrancar más liviano, {{producto}} solo te lo dejo en {{precio}} hasta el {{vence}}.\n\nSi te interesa, decime y te mando los datos.'
+  ]),
+  nivel_2_mirando: Object.freeze([
+    'Hola {{nombre}} 👋\nTengo una propuesta para vos: {{producto}} te queda en {{precio}}, y te respeto ese precio hasta el {{vence}}.\n\n¿Te interesa? Decime y te paso los datos 🙌🏻',
+    '¡Hola, {{nombre}}! 😊\nTe aviso que {{producto}} te queda en {{precio}} hasta el {{vence}}. Si la duda era por el precio, quizás ahora sí te sirve.\n\n¿Querés que te pase los datos?',
+    '¡Hola, {{nombre}}! 🤍\n¿Seguís con ganas de {{producto}}? Te lo puedo dejar en {{precio}} hasta el {{vence}}.\n\nSi te sirve, avisame y te paso los datos 🙌🏻'
+  ]),
+  nivel_2_sin_descuento: Object.freeze([
+    'Hola {{nombre}} 👋\n¿Te sigue interesando {{producto}}? Si hay algo que te frena, contame y lo vemos.\n\nSi ya lo querés, decime y te paso los datos 🙌🏻',
+    '¡Hola, {{nombre}}! 😊\nTe escribo para ver si pudiste pensarlo. Si te quedó alguna duda de {{producto}}, preguntame sin compromiso.\n\nSi querés avanzar, decime y te paso los datos 🤍',
+    '¡Hola, {{nombre}}! 🤍\nQuería saber si {{producto}} sigue siendo algo que te interesa. Si es así, te paso los datos cuando quieras.\n\nY si no, no pasa nada 🙌🏻'
+  ]),
+  nivel_3: Object.freeze([
+    'Hola {{nombre}} 👋\nNo quiero insistir de más, así que este es mi último mensaje: si todavía querés {{producto}}, te lo dejo en {{precio}} hasta el {{vence}}.\n\nSi no era para vos, todo bien. Acá quedo por si lo necesitás más adelante.',
+    '¡Hola, {{nombre}}! 🤍\nUn último mensaje y no te molesto más: {{producto}} te queda en {{precio}} hasta el {{vence}}, por si todavía te interesa.\n\nSi ya decidiste que no, perfecto, gracias por tu tiempo.',
+    '¡Hola, {{nombre}}! 😊\nTe dejo esto y no insisto más: si {{producto}} sigue en tus planes, lo tenés a {{precio}} hasta el {{vence}} y te paso los datos ahora mismo.\n\nSi no, sin problema. Cualquier cosa, acá estoy.'
+  ]),
+  nivel_3_sin_descuento: Object.freeze([
+    'Hola {{nombre}} 👋\nNo quiero insistir de más, así que este es mi último mensaje: si todavía querés {{producto}} a {{precio}}, decime y te paso los datos ahora mismo.\n\nSi no era para vos, todo bien. Acá quedo por si lo necesitás.',
+    '¡Hola, {{nombre}}! 🤍\nUn último mensaje y no te escribo más: si {{producto}} sigue en tus planes, avisame y te paso los datos.\n\nSi no, todo bien, gracias por tu tiempo 🙌🏻',
+    '¡Hola, {{nombre}}! 😊\nTe dejo esto y no insisto más: si todavía querés {{producto}}, decime y te mando los datos enseguida.\n\nY si no era para vos, no pasa nada. Acá quedo para lo que necesites.'
+  ])
+});
+
+/**
  * Los textos por defecto que hubo el 26/09, antes de este arreglo.
  *
  * Si alguien tocó "Restablecer" o guardó sin cambiar nada, esos textos quedaron
@@ -107,6 +169,48 @@ const MOTIVOS = Object.freeze({
 /** Elige al azar una de las variantes. */
 function variar(opciones) {
   return opciones[Math.floor(Math.random() * opciones.length)];
+}
+
+/**
+ * Parte un texto en sus redacciones.
+ *
+ * Una línea que tenga solo tres o más guiones separa una redacción de la
+ * siguiente. Sin esa línea el texto es una sola redacción, como siempre.
+ */
+function separarRedacciones(texto) {
+  return String(texto || '')
+    .split(/\r?\n[ \t]*-{3,}[ \t]*\r?\n/)
+    .map(t => t.trim())
+    .filter(Boolean);
+}
+
+/** La última redacción que salió de cada seguimiento, para no repetirla seguida. */
+const ultimaRedaccion = new Map();
+
+/**
+ * Elige una redacción al azar, distinta de la anterior para ese seguimiento.
+ *
+ * @param {string} llave Identifica el seguimiento (producto y clave)
+ * @param {string[]} opciones
+ * @returns {string}
+ */
+function elegirRedaccion(llave, opciones) {
+  if (opciones.length <= 1) return opciones[0] || '';
+
+  const previa = ultimaRedaccion.get(llave);
+  const posibles = opciones.map((_, i) => i).filter(i => i !== previa);
+  const i = variar(posibles);
+  ultimaRedaccion.set(llave, i);
+  return opciones[i];
+}
+
+const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Una pausa al azar entre `minSeg` y `maxSeg`, en milisegundos. */
+function pausaAleatoria(minSeg, maxSeg) {
+  const min = Math.max(0, Number(minSeg) || 0);
+  const max = Math.max(min, Number(maxSeg) || 0);
+  return Math.round((min + Math.random() * (max - min)) * 1000);
 }
 
 /**
@@ -276,20 +380,30 @@ export const recoveryService = {
     const cual = segmento(candidato.etapa);
     const cfg = await this.textosPara(candidato);
 
-    let plantilla = '';
+    let clave = '';
     if (nivel === 1) {
-      plantilla = cual === 'decidido' ? cfg.nivel_1_decidido : cfg.nivel_1_mirando;
+      clave = cual === 'decidido' ? 'nivel_1_decidido' : 'nivel_1_mirando';
     } else if (nivel === 2) {
       if (!conDescuento) {
-        plantilla = cfg.nivel_2_sin_descuento;
+        clave = 'nivel_2_sin_descuento';
       } else if (candidato.bump_estado === 'aceptado') {
-        plantilla = cfg.nivel_2_extra || cfg.nivel_2_decidido;
+        clave = cfg.nivel_2_extra ? 'nivel_2_extra' : 'nivel_2_decidido';
       } else {
-        plantilla = cual === 'decidido' ? cfg.nivel_2_decidido : cfg.nivel_2_mirando;
+        clave = cual === 'decidido' ? 'nivel_2_decidido' : 'nivel_2_mirando';
       }
     } else {
-      plantilla = conDescuento ? cfg.nivel_3 : cfg.nivel_3_sin_descuento;
+      clave = conDescuento ? 'nivel_3' : 'nivel_3_sin_descuento';
     }
+
+    // Las redacciones propias (separadas por ---) mandan: si las hay, solo se
+    // usan esas. Con un texto único se suman las alternativas de la casa, para
+    // que no salga el mismo mensaje a todo el mundo.
+    const propias = separarRedacciones(cfg[clave]);
+    const redacciones = propias.length > 1 || !envConfig.recuperacion.variantes
+      ? propias
+      : [...propias, ...(VARIANTES_RECUPERACION[clave] || [])];
+
+    const plantilla = elegirRedaccion(`${candidato.product_id ?? 'x'}:${clave}`, redacciones);
 
     let texto = String(plantilla || '')
       .replace(/\{\{\s*nombre\s*\}\}/gi, nombre || '')
@@ -506,6 +620,21 @@ export const recoveryService = {
 
     if (!cfg.habilitada) return balance;
 
+    // Con pausas entre mensajes una pasada dura minutos. Si la anterior sigue
+    // en curso cuando suena el reloj, esta no arranca: dos pasadas a la vez
+    // serían, justamente, la ráfaga que se está evitando.
+    if (this._enCurso) return balance;
+    this._enCurso = true;
+
+    try {
+      return await this._pasada(cfg, balance);
+    } finally {
+      this._enCurso = false;
+    }
+  },
+
+  /** El cuerpo de `pasada`, para que el candado se suelte pase lo que pase. */
+  async _pasada(cfg, balance) {
     let candidatos = [];
     try {
       candidatos = await orderRepository.paraRecuperar({
@@ -517,8 +646,20 @@ export const recoveryService = {
       return balance;
     }
 
+    let fallosSeguidos = 0;
+
     for (const candidato of candidatos) {
       if (balance.enviados >= cfg.maxPorPasada) break;
+
+      // Meta viene rechazando los envíos: seguir insistiendo con el resto de
+      // la cola no recupera ventas y sí agrava el problema del número.
+      if (cfg.cortarTrasFallos > 0 && fallosSeguidos >= cfg.cortarTrasFallos) {
+        console.warn(
+          `⚠️ [RECUPERACION] Pasada cortada: ${fallosSeguidos} envíos seguidos rechazados. ` +
+          'Revisá el estado del número en WhatsApp Manager antes de seguir.'
+        );
+        break;
+      }
 
       try {
         balance.revisados++;
@@ -570,6 +711,7 @@ export const recoveryService = {
 
         if (enviado) {
           balance.enviados++;
+          fallosSeguidos = 0;
 
           // El descuento existe recién ahora que el mensaje salió, y vence.
           // Antes dependía del escalón, que sube aunque el mensaje no se mande:
@@ -592,12 +734,18 @@ export const recoveryService = {
               await orderRepository.marcarBump(candidato.id, 'rechazado').catch(() => {});
             }
           }
+          // Una pausa al azar antes del siguiente, para que no salgan pegados.
+          if (balance.enviados < cfg.maxPorPasada) {
+            await esperar(pausaAleatoria(cfg.pausaMinSeg, cfg.pausaMaxSeg));
+          }
         } else {
           balance.fallidos++;
+          fallosSeguidos++;
           console.warn(`⚠️ [RECUPERACION] Pedido #${candidato.id} nivel ${nivel}: ${detalle}`);
         }
       } catch (err) {
         balance.fallidos++;
+        fallosSeguidos++;
         console.warn(`⚠️ [RECUPERACION] Pedido #${candidato?.id}: ${err.message}`);
       }
     }
@@ -643,6 +791,8 @@ export const recoveryService = {
 
     console.log(
       `🔁 [RECUPERACION] Activa: revisión cada ${cfg.cadaMinutos} min, ` +
+      `hasta ${cfg.maxPorPasada} por pasada con ${cfg.pausaMinSeg}-${cfg.pausaMaxSeg} s entre uno y otro, ` +
+      `variantes ${cfg.variantes ? 'activas' : 'apagadas'}, ` +
       `escalones a los ${cfg.escalones.join(' / ')} min, ` +
       `silencio de ${cfg.silencioDesde}:00 a ${cfg.silencioHasta}:00 (Paraguay).`
     );

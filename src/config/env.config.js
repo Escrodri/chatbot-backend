@@ -258,7 +258,7 @@ export const envConfig = Object.freeze({
     habilitada: (process.env.RECUPERACION_ACTIVA || 'true').trim().toLowerCase() !== 'false',
 
     // Cada cuánto se revisa quién quedó a mitad de camino.
-    cadaMinutos: parseInt(process.env.RECUPERACION_CADA_MIN || '15', 10),
+    cadaMinutos: parseInt(process.env.RECUPERACION_CADA_MIN || '10', 10),
 
     // Los tres escalones, en minutos desde el último movimiento de la persona.
     escalones: Object.freeze([
@@ -273,7 +273,29 @@ export const envConfig = Object.freeze({
     // Cuántos mensajes de recuperación se permiten por pasada. Es un freno,
     // no una cuota: si un día entran mil conversaciones, mandarlas todas de
     // golpe se ve como un envío masivo y Meta lo trata como tal.
-    maxPorPasada: parseInt(process.env.RECUPERACION_MAX_POR_PASADA || '40', 10),
+    //
+    // Eran 40 cada 15 minutos y sin pausa entre uno y otro: a las ocho de la
+    // mañana, cuando termina el silencio, salía toda la cola pegada. Eso es lo
+    // que Meta lee como spam. Ahora son pocos por pasada y lo que no entra
+    // espera a la pasada siguiente, sin perderse.
+    maxPorPasada: parseInt(process.env.RECUPERACION_MAX_POR_PASADA || '2', 10),
+
+    // Pausa al azar entre un mensaje y el siguiente dentro de la misma pasada,
+    // en segundos. Una persona no escribe a dos clientes con medio segundo de
+    // diferencia y siempre a intervalos exactos.
+    pausaMinSeg: parseInt(process.env.RECUPERACION_PAUSA_MIN_SEG || '30', 10),
+    pausaMaxSeg: parseInt(process.env.RECUPERACION_PAUSA_MAX_SEG || '90', 10),
+
+    // Si cada seguimiento tiene varias redacciones, los mensajes no salen
+    // idénticos uno tras otro. Las redacciones propias van en el mismo texto
+    // separadas por una línea con tres guiones (---). Con RECUPERACION_VARIANTES
+    // en false solo se usa el texto cargado, tal cual.
+    variantes: (process.env.RECUPERACION_VARIANTES || 'true').trim().toLowerCase() !== 'false',
+
+    // Si Meta rechaza este número de envíos seguidos, la pasada se corta. Un
+    // número restringido o con el token vencido no mejora insistiendo cuarenta
+    // veces: empeora.
+    cortarTrasFallos: parseInt(process.env.RECUPERACION_CORTAR_TRAS_FALLOS || '2', 10),
   },
 
   // Precios especiales: cuánto duran y cuánta tolerancia tienen.
