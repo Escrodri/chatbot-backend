@@ -6,6 +6,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { rawBodyJsonParser, errorHandler } from './middlewares/index.js';
 import { apiRouter } from './routes/index.js';
+import { visitasRouter } from './routes/visitas.routes.js';
 import { config } from './config/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,6 +52,16 @@ export function createApp() {
 
   // 1. Cabeceras de seguridad
   app.use(securityHeaders);
+
+  // 1b. Rastro de visitas de la landing (público, sin cookies). Va antes del CORS general
+  //     porque lo llama una página de otro dominio (la landing), no el panel.
+  //     Más orígenes: VISITAS_ORIGENES (separados por comas).
+  const origenesRastro = [
+    'https://plan21.pediloaqui.online',
+    ...(process.env.VISITAS_ORIGENES || '').split(',').map(o => o.trim()).filter(Boolean),
+    ...config.security.allowedOrigins
+  ];
+  app.use('/api/visitas', cors({ origin: origenesRastro, methods: ['GET', 'POST', 'OPTIONS'] }), visitasRouter);
 
   // 2. CORS restringido a los orígenes autorizados (M-01).
   //    Se permiten también las peticiones sin cabecera Origin (curl, Meta, same-origin).

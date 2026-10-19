@@ -32,3 +32,6 @@ cookies.txt
 !package-lock.json
 _to_delete/
 .gemini/
+check_recent_msgs.js
+inspect_guia_ia.js
+

@@ -1,0 +1,161 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import http from 'node:http';
+import { createApp } from '../src/app.js';
+import {
+  normalizar,
+  resumir,
+  claveDelDash,
+  claveValida,
+  _reiniciar
+} from '../src/services/visitas.service.js';
+
+const URL_ANUNCIO =
+  '/?utm_source=facebook&utm_medium=paid&utm_campaign=es_plan21&utm_content=cenafinde&ad_id=23860218569400799&fbclid=IwAR123abc';
+
+test('VISITAS: normaliza la dirección de entrada sin guardar el valor de fbclid', () => {
+  const ev = normalizar({ t: 'visita', u: URL_ANUNCIO, r: 'l.facebook.com', d: 'm' });
+  assert.equal(ev.tipo, 'visita');
+  assert.equal(ev.utm_source, 'facebook');
+  assert.equal(ev.utm_content, 'cenafinde');
+  assert.equal(ev.ad_id, '23860218569400799');
+  assert.equal(ev.fbclid, true);
+  assert.ok(!ev.url.includes('IwAR123abc'), 'el fbclid no debe guardarse');
+  assert.ok(ev.url.includes('fbclid=x'));
+  assert.equal(ev.ref, 'l.facebook.com');
+  assert.equal(ev.disp, 'm');
+});
+
+test('VISITAS: ad_id solo vale si son números (Meta a veces deja {{ad.id}} sin reemplazar)', () => {
+  const ev = normalizar({ t: 'visita', u: '/?ad_id=%7B%7Bad.id%7D%7D&utm_source=facebook' });
+  assert.equal(ev.ad_id, '');
+  assert.equal(ev.utm_source, 'facebook');
+});
+
+test('VISITAS: el clic en comprar guarda el sck y la oferta del link de Hotmart', () => {
+  const ev = normalizar({
+    t: 'clic_comprar',
+    u: URL_ANUNCIO,
+    dest: 'https://pay.hotmart.com/Y107906074U?off=gkors10r&checkoutMode=10&sck=23860218569400799%7Ccenafinde'
+  });
+  assert.equal(ev.tipo, 'clic_comprar');
+  assert.equal(ev.destino_off, 'gkors10r');
+  assert.equal(ev.destino_sck, '23860218569400799|cenafinde');
+});
+
+test('VISITAS: rechaza eventos vacíos o de un tipo desconocido', () => {
+  assert.equal(normalizar(null), null);
+  assert.equal(normalizar({ t: 'otro', u: '/' }), null);
+  assert.equal(normalizar({ t: 'visita' }), null);
+});
+
+test('VISITAS: el resumen separa por anuncio y marca qué llega y qué no', () => {
+  const ahora = new Date('2026-10-19T15:00:00Z');
+  const mk = (t, u, dest) => normalizar({ t, u, dest }, ahora);
+  const eventos = [
+    mk('visita', URL_ANUNCIO),
+    mk('visita', URL_ANUNCIO),
+    mk('visita', '/?utm_source=facebook&utm_content=control'),
+    mk('visita', '/'),
+    mk('clic_comprar', URL_ANUNCIO, 'https://pay.hotmart.com/x?sck=abc'),
+    mk('clic_comprar', '/', 'https://pay.hotmart.com/x')
+  ];
+  const r = resumir(eventos, { ahora, dias: 7 });
+
+  assert.equal(r.totales.visitas, 4);
+  assert.equal(r.totales.clics, 2);
+  assert.equal(r.diagnostico.conUtm.n, 3);
+  assert.equal(r.diagnostico.conAdId.n, 2);
+  assert.equal(r.diagnostico.clicsConSck.n, 1);
+  assert.equal(r.diagnostico.clicsConSck.de, 2);
+
+  const cena = r.porAnuncio.find((f) => f.nombre === 'cenafinde');
+  assert.equal(cena.visitas, 2);
+  assert.equal(cena.clics, 1);
+  assert.ok(r.porAnuncio.find((f) => f.nombre === '(sin dato)'));
+  assert.equal(r.porDia.length, 7);
+  assert.equal(r.porDia.at(-1).visitas, 4);
+});
+
+test('VISITAS: la clave del dash es estable y solo abre con la correcta', () => {
+  assert.equal(claveDelDash(), claveDelDash());
+  assert.equal(claveValida(claveDelDash()), true);
+  assert.equal(claveValida('otra-cosa'), false);
+  assert.equal(claveValida(''), false);
+});
+
+test('VISITAS: POST público guarda la visita y el dash la devuelve solo con clave', async () => {
+  _reiniciar();
+  const app = createApp();
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://127.0.0.1:${server.address().port}/api/visitas`;
+
+  try {
+    // Como lo manda la landing: texto plano, sin cabeceras raras.
+    const post = await fetch(base, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', Origin: 'https://plan21.pediloaqui.online', 'User-Agent': 'Mozilla/5.0 (iPhone)' },
+      body: JSON.stringify({ t: 'visita', u: URL_ANUNCIO, r: 'm.facebook.com', d: 'm' })
+    });
+    assert.equal(post.status, 204);
+    assert.equal(post.headers.get('access-control-allow-origin'), 'https://plan21.pediloaqui.online');
+
+    // Un evento inválido no se acepta.
+    const malo = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'text/plain', 'User-Agent': 'Mozilla/5.0' }, body: '{"t":"x"}' });
+    assert.equal(malo.status, 400);
+
+    // Los programas (bots, vistas previas) se ignoran sin error.
+    const bot = await fetch(base, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', 'User-Agent': 'facebookexternalhit/1.1' },
+      body: JSON.stringify({ t: 'visita', u: '/' })
+    });
+    assert.equal(bot.status, 204);
+
+    // Sin clave: cerrado.
+    assert.equal((await fetch(`${base}/resumen`)).status, 401);
+    assert.equal((await fetch(`${base}/dash`)).status, 401);
+
+    // Con clave: se ve la visita (la base puede no estar: queda en memoria).
+    const clave = encodeURIComponent(claveDelDash());
+    const res = await fetch(`${base}/resumen?dias=7&clave=${clave}`);
+    assert.equal(res.status, 200);
+    const datos = await res.json();
+    assert.equal(datos.totales.visitas, 1);
+    assert.equal(datos.porAnuncio[0].nombre, 'cenafinde');
+    assert.equal(datos.porAdId[0].nombre, '23860218569400799');
+
+    const dash = await fetch(`${base}/dash?clave=${clave}`);
+    assert.equal(dash.status, 200);
+    assert.match(await dash.text(), /Origen de visitas/);
+  } finally {
+    server.close();
+  }
+});
+
+test('VISITAS: guarda campaña, conjunto, anuncio y ubicación que Meta rellena en la dirección', () => {
+  const ev = normalizar({
+    t: 'visita',
+    u: '/?utm_source=facebook&utm_medium=paid&utm_campaign=Espa%C3%B1a%20-%20Plan%2021&utm_content=cenafinde%20ad&utm_term=Espa%C3%B1a%20-%2018-65%20-%20web' +
+       '&campaign_id=23860218569390799&adset_id=23860218569410799&ad_id=23860218569400799&placement=Facebook_Mobile_Feed&site=fb'
+  });
+  assert.equal(ev.campaign_id, '23860218569390799');
+  assert.equal(ev.adset_id, '23860218569410799');
+  assert.equal(ev.ad_id, '23860218569400799');
+  assert.equal(ev.placement, 'Facebook_Mobile_Feed');
+  assert.equal(ev.site, 'fb');
+  assert.equal(ev.utm_term, 'España - 18-65 - web');
+
+  const r = resumir([ev], { ahora: new Date(), dias: 1 });
+  assert.equal(r.diagnostico.conAdset.n, 1);
+  assert.equal(r.diagnostico.conCampaignId.n, 1);
+  assert.equal(r.porAdset[0].nombre, 'España - 18-65 - web');
+  assert.equal(r.porCampana[0].nombre, 'España - Plan 21');
+  assert.equal(r.porUbicacion[0].nombre, 'Facebook_Mobile_Feed · fb');
+
+  // Si Meta no reemplaza la llave, no se guarda como ID.
+  const sin = normalizar({ t: 'visita', u: '/?adset_id=%7B%7Badset.id%7D%7D&campaign_id=%7B%7Bcampaign.id%7D%7D' });
+  assert.equal(sin.adset_id, '');
+  assert.equal(sin.campaign_id, '');
+});

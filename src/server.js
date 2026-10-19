@@ -6,6 +6,7 @@ import { initDatabase } from './database/index.js';
 import { logRepository } from './repositories/log.repository.js';
 import { recoveryService } from './services/recovery.service.js';
 import { iniciarMetaAds } from './services/meta-ads.service.js';
+import { claveDelDash } from './services/visitas.service.js';
 
 const server = http.createServer(app);
 
@@ -46,6 +47,8 @@ try {
 server.listen(config.port, () => {
   console.log(`🚀 [SERVER] Servidor omnicanal iniciado con éxito en http://localhost:${config.port}`);
   console.log(`📡 [HEALTH] Comprobación de estado disponible en http://localhost:${config.port}/health`);
+  // Dash de visitas de la landing: la clave sale de SESSION_SECRET (o de VISITAS_CLAVE si se define).
+  console.log(`📊 [VISITAS] Dash: /api/visitas/dash?clave=${claveDelDash()}`);
   console.log(`🔒 [SECURITY] Validación HMAC-SHA256 y cifrado AES-256-GCM activos`);
 
   // Marca de versión de la verificación de comprobantes.
