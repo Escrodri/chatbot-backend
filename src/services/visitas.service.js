@@ -294,10 +294,27 @@ export function resumir(eventos, { ahora = new Date(), dias = 7, zona = ZONA, re
     porDia: [...porDia.values()],
     recientes: [...eventos]
       .sort((a, b) => new Date(b.ts) - new Date(a.ts))
-      .slice(0, recientes)
+      .slice(0, 100)
       .map((e) => ({
-        ts: e.ts, tipo: e.tipo, url: e.url, ref: e.ref, disp: e.disp,
-        destino: e.destino, destino_sck: e.destino_sck, destino_off: e.destino_off
+        ts: e.ts,
+        tipo: e.tipo,
+        url: e.url,
+        ref: e.ref,
+        disp: e.disp,
+        destino: e.destino,
+        destino_sck: e.destino_sck,
+        destino_off: e.destino_off,
+        utm_source: e.utm_source || '',
+        utm_medium: e.utm_medium || '',
+        utm_campaign: e.utm_campaign || '',
+        utm_content: e.utm_content || '',
+        utm_term: e.utm_term || '',
+        sck: e.sck || '',
+        ad_id: e.ad_id || '',
+        adset_id: e.adset_id || '',
+        campaign_id: e.campaign_id || '',
+        placement: e.placement || '',
+        site: e.site || ''
       }))
   };
 }
