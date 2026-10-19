@@ -61,7 +61,8 @@ export function createApp() {
     ...(process.env.VISITAS_ORIGENES || '').split(',').map(o => o.trim()).filter(Boolean),
     ...config.security.allowedOrigins
   ];
-  app.use('/api/visitas', cors({ origin: origenesRastro, methods: ['GET', 'POST', 'OPTIONS'] }), visitasRouter);
+  // credentials: el panel (otro dominio) lee el informe con su sesión y su token.
+  app.use('/api/visitas', cors({ origin: origenesRastro, methods: ['GET', 'POST', 'OPTIONS'], credentials: true }), visitasRouter);
 
   // 2. CORS restringido a los orígenes autorizados (M-01).
   //    Se permiten también las peticiones sin cabecera Origin (curl, Meta, same-origin).

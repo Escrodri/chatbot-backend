@@ -159,3 +159,33 @@ test('VISITAS: guarda campaña, conjunto, anuncio y ubicación que Meta rellena 
   assert.equal(sin.adset_id, '');
   assert.equal(sin.campaign_id, '');
 });
+
+test('VISITAS: el panel (otro dominio) puede leer el informe con su sesión: CORS con credenciales', async () => {
+  _reiniciar();
+  const app = createApp();
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://127.0.0.1:${server.address().port}/api/visitas`;
+
+  try {
+    // Pregunta previa del navegador (preflight) con la cabecera Authorization.
+    const pre = await fetch(`${base}/resumen`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://plan21.pediloaqui.online',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'authorization'
+      }
+    });
+    assert.equal(pre.status, 204);
+    assert.equal(pre.headers.get('access-control-allow-origin'), 'https://plan21.pediloaqui.online');
+    assert.equal(pre.headers.get('access-control-allow-credentials'), 'true');
+    assert.match(pre.headers.get('access-control-allow-headers') || '', /authorization/i);
+
+    // Un origen que no está en la lista no recibe permiso.
+    const ajeno = await fetch(`${base}/resumen`, { method: 'OPTIONS', headers: { Origin: 'https://otro.example', 'Access-Control-Request-Method': 'GET' } });
+    assert.equal(ajeno.headers.get('access-control-allow-origin'), null);
+  } finally {
+    server.close();
+  }
+});
