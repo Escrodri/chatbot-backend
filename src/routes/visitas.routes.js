@@ -13,4 +13,8 @@ visitasRouter.post('/', express.text({ limit: '8kb' }), express.json({ limit: '8
 visitasRouter.get('/resumen', cookieParser(), visitasController.resumen);
 visitasRouter.get('/dash', cookieParser(), visitasController.dash);
 
+// Eliminación de pruebas y mantenimiento (solo administrador)
+visitasRouter.delete('/limpiar', cookieParser(), visitasController.limpiar);
+visitasRouter.delete('/:id', cookieParser(), visitasController.eliminar);
+
 export default visitasRouter;

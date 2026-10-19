@@ -81,6 +81,7 @@ export function normalizar(cuerpo, ahora = new Date()) {
   const destino = dest ? parametrosDe(dest) : null;
 
   return {
+    id: `mem_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     ts: ahora.toISOString(),
     tipo: cuerpo.t,
     ruta,
@@ -153,15 +154,17 @@ async function guardarEnDb(ev) {
   if (Date.now() < dbPausadaHasta) return false;
   try {
     await asegurarTabla();
-    await query(
+    const r = await query(
       `INSERT INTO visitas_web
         (ts, tipo, ruta, url, utm_source, utm_medium, utm_campaign, utm_content, utm_term,
          sck, src, campaign_id, adset_id, ad_id, placement, site, fbclid, ref, disp, destino, destino_sck, destino_off)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+       RETURNING id`,
       [ev.ts, ev.tipo, ev.ruta, ev.url, ev.utm_source, ev.utm_medium, ev.utm_campaign, ev.utm_content,
         ev.utm_term, ev.sck, ev.src, ev.campaign_id, ev.adset_id, ev.ad_id, ev.placement, ev.site, ev.fbclid,
         ev.ref, ev.disp, ev.destino, ev.destino_sck, ev.destino_off]
     );
+    if (r.rows?.[0]?.id) ev.id = String(r.rows[0].id);
     modoAlmacen = 'postgres';
     return true;
   } catch (err) {
@@ -189,13 +192,14 @@ export async function leerEventos(desde) {
   try {
     await asegurarTabla();
     const r = await query(
-      `SELECT ts, tipo, ruta, url, utm_source, utm_medium, utm_campaign, utm_content, utm_term, sck, src,
+      `SELECT id, ts, tipo, ruta, url, utm_source, utm_medium, utm_campaign, utm_content, utm_term, sck, src,
               campaign_id, adset_id, ad_id, placement, site, fbclid, ref, disp, destino, destino_sck, destino_off
          FROM visitas_web WHERE ts >= $1 ORDER BY ts DESC LIMIT 50000`,
       [desde.toISOString()]
     );
     const deDb = r.rows.map((f) => ({
       ...f,
+      id: String(f.id),
       ts: new Date(f.ts).toISOString(),
       utm_source: f.utm_source || '', utm_medium: f.utm_medium || '', utm_campaign: f.utm_campaign || '',
       utm_content: f.utm_content || '', utm_term: f.utm_term || '', sck: f.sck || '', src: f.src || '',
@@ -296,6 +300,7 @@ export function resumir(eventos, { ahora = new Date(), dias = 7, zona = ZONA, re
       .sort((a, b) => new Date(b.ts) - new Date(a.ts))
       .slice(0, 100)
       .map((e) => ({
+        id: e.id ? String(e.id) : '',
         ts: e.ts,
         tipo: e.tipo,
         url: e.url,
@@ -342,6 +347,45 @@ export function estadoAlmacen() {
   return modoAlmacen;
 }
 
+/** Elimina un evento puntual por su ID o fecha/hora. */
+export async function eliminarEvento(id, ts) {
+  if (id && /^\d+$/.test(String(id))) {
+    try {
+      await query('DELETE FROM visitas_web WHERE id = $1', [id]);
+    } catch (err) {
+      console.warn('⚠️ [VISITAS] Error al borrar evento de DB:', err.message);
+    }
+  } else if (ts) {
+    try {
+      await query('DELETE FROM visitas_web WHERE ts = $1', [new Date(ts).toISOString()]);
+    } catch {}
+  }
+
+  // Quitar también de memoria
+  const idx = memoria.findIndex((e) => (id && String(e.id) === String(id)) || (ts && e.ts === ts));
+  if (idx !== -1) memoria.splice(idx, 1);
+  return true;
+}
+
+/** Limpia las visitas de prueba: 'todas' borra todo el historial; 'sin_utm' borra solo las que no vinieron de anuncios. */
+export async function limpiarEventos({ tipo = 'todas' } = {}) {
+  try {
+    if (tipo === 'sin_utm') {
+      await query("DELETE FROM visitas_web WHERE utm_source IS NULL OR utm_source = ''");
+      for (let i = memoria.length - 1; i >= 0; i--) {
+        if (!memoria[i].utm_source) memoria.splice(i, 1);
+      }
+    } else {
+      await query('DELETE FROM visitas_web');
+      memoria.length = 0;
+    }
+  } catch (err) {
+    console.warn('⚠️ [VISITAS] Error al vaciar eventos de DB:', err.message);
+    if (tipo === 'todas') memoria.length = 0;
+  }
+  return true;
+}
+
 /** Solo para pruebas. */
 export function _reiniciar() {
   memoria.length = 0;
@@ -350,4 +394,14 @@ export function _reiniciar() {
   modoAlmacen = 'memoria';
 }
 
-export default { normalizar, registrar, leerEventos, resumir, claveDelDash, claveValida, estadoAlmacen };
+export default {
+  normalizar,
+  registrar,
+  leerEventos,
+  resumir,
+  eliminarEvento,
+  limpiarEventos,
+  claveDelDash,
+  claveValida,
+  estadoAlmacen
+};

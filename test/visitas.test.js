@@ -4,7 +4,11 @@ import http from 'node:http';
 import { createApp } from '../src/app.js';
 import {
   normalizar,
+  registrar,
+  leerEventos,
   resumir,
+  eliminarEvento,
+  limpiarEventos,
   claveDelDash,
   claveValida,
   _reiniciar
@@ -188,4 +192,24 @@ test('VISITAS: el panel (otro dominio) puede leer el informe con su sesión: COR
   } finally {
     server.close();
   }
+});
+
+test('VISITAS: eliminar evento puntual y limpiar pruebas de la memoria', async () => {
+  _reiniciar();
+  const ev1 = await registrar(normalizar({ t: 'visita', u: '/?utm_source=facebook&utm_content=anuncio1' }));
+  const ev2 = await registrar(normalizar({ t: 'visita', u: '/?directo=prueba' }));
+
+  const antes = await leerEventos(new Date(Date.now() - 60000));
+  assert.equal(antes.eventos.length, 2);
+
+  // Eliminar evento individual
+  await eliminarEvento(ev1.id, ev1.ts);
+  const despuesUno = await leerEventos(new Date(Date.now() - 60000));
+  assert.equal(despuesUno.eventos.length, 1);
+  assert.equal(despuesUno.eventos[0].id, ev2.id);
+
+  // Limpiar todas las pruebas
+  await limpiarEventos({ tipo: 'todas' });
+  const vacio = await leerEventos(new Date(Date.now() - 60000));
+  assert.equal(vacio.eventos.length, 0);
 });

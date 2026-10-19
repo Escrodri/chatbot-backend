@@ -5,6 +5,8 @@ import {
   registrar,
   leerEventos,
   resumir,
+  eliminarEvento,
+  limpiarEventos,
   claveValida
 } from '../services/visitas.service.js';
 import { DASH_HTML } from './visitas.dash.js';
@@ -99,6 +101,23 @@ export const visitasController = {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'");
     return res.type('html').send(DASH_HTML);
+  },
+
+  /** DELETE /api/visitas/:id?ts=... */
+  async eliminar(req, res) {
+    if (!tieneAcceso(req)) return res.status(401).json({ error: 'Falta autorización de administrador' });
+    const { id } = req.params;
+    const { ts } = req.query;
+    await eliminarEvento(id, ts);
+    return res.json({ success: true });
+  },
+
+  /** DELETE /api/visitas/limpiar?tipo=todas|sin_utm */
+  async limpiar(req, res) {
+    if (!tieneAcceso(req)) return res.status(401).json({ error: 'Falta autorización de administrador' });
+    const { tipo = 'todas' } = req.query;
+    await limpiarEventos({ tipo });
+    return res.json({ success: true });
   }
 };
 
