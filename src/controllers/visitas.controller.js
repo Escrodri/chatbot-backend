@@ -7,7 +7,8 @@ import {
   resumir,
   eliminarEvento,
   limpiarEventos,
-  claveValida
+  claveValida,
+  obtenerInicioDia
 } from '../services/visitas.service.js';
 import { DASH_HTML } from './visitas.dash.js';
 
@@ -74,19 +75,59 @@ export const visitasController = {
     return undefined;
   },
 
-  /** GET /api/visitas/resumen?dias=7 */
+    /** GET /api/visitas/resumen?periodo=hoy|ayer|7dias|30dias&dias=7&zona=America/Asuncion */
   async resumen(req, res) {
     if (!tieneAcceso(req)) return res.status(401).json({ error: 'Falta la clave del dash' });
     res.setHeader('Cache-Control', 'no-store');
 
-    const dias = Math.min(90, Math.max(1, parseInt(req.query.dias, 10) || 7));
+    const zona = (req.query.zona || '').trim() || 'America/Asuncion';
+    let periodo = (req.query.periodo || '').trim();
+    let dias = parseInt(req.query.dias, 10);
+
+    // Mapeo retrocompatible
+    if (!periodo) {
+      if (dias === 1) periodo = 'hoy';
+      else if (dias === 30) periodo = '30dias';
+      else if (dias === 7) periodo = '7dias';
+      else periodo = '7dias';
+    }
+
     const ahora = new Date();
-    // Hoy = desde las 00:00 de Asunción; el resto, días corridos hacia atrás.
-    const desde = new Date(ahora.getTime() - dias * 86400000);
+    let desde;
+    let hasta = null;
+
+    if (periodo === 'hoy') {
+      desde = obtenerInicioDia(ahora, zona);
+      hasta = ahora;
+      dias = 1;
+    } else if (periodo === 'ayer') {
+      const inicioHoy = obtenerInicioDia(ahora, zona);
+      desde = obtenerInicioDia(new Date(inicioHoy.getTime() - 1000), zona);
+      hasta = new Date(inicioHoy.getTime() - 1);
+      dias = 1;
+    } else if (periodo === '30dias' || dias === 30) {
+      periodo = '30dias';
+      dias = 30;
+      desde = new Date(ahora.getTime() - 30 * 86400000);
+      hasta = ahora;
+    } else {
+      periodo = '7dias';
+      dias = 7;
+      desde = new Date(ahora.getTime() - 7 * 86400000);
+      hasta = ahora;
+    }
 
     try {
-      const { eventos, almacenamiento } = await leerEventos(desde);
-      return res.json({ ...resumir(eventos, { ahora, dias }), almacenamiento, dias });
+      const { eventos, almacenamiento } = await leerEventos(desde, hasta);
+      return res.json({
+        ...resumir(eventos, { ahora, dias, periodo, zona, desde, hasta }),
+        almacenamiento,
+        dias,
+        periodo,
+        zona,
+        desde: desde.toISOString(),
+        hasta: hasta ? hasta.toISOString() : null
+      });
     } catch (err) {
       console.error('❌ [VISITAS] Error al armar el resumen:', err.message);
       return res.status(500).json({ error: 'No se pudo armar el resumen' });

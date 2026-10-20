@@ -11,7 +11,9 @@ import {
   limpiarEventos,
   claveDelDash,
   claveValida,
-  _reiniciar
+  _reiniciar,
+  obtenerInicioDia,
+  diaEn
 } from '../src/services/visitas.service.js';
 
 const URL_ANUNCIO =
@@ -212,4 +214,61 @@ test('VISITAS: eliminar evento puntual y limpiar pruebas de la memoria', async (
   await limpiarEventos({ tipo: 'todas' });
   const vacio = await leerEventos(new Date(Date.now() - 60000));
   assert.equal(vacio.eventos.length, 0);
+});
+
+test('VISITAS: filtra por periodo hoy y ayer y marca es_hoy / es_ayer en recientes', () => {
+  const ahora = new Date('2026-10-20T15:00:00Z');
+  const zona = 'America/Asuncion';
+  const inicioHoy = obtenerInicioDia(ahora, zona);
+  const ayerHora = new Date(inicioHoy.getTime() - 2 * 3600000); // 2 horas antes de las 00:00 de hoy -> ayer 22:00
+
+  const evHoy = normalizar({ t: 'visita', u: '/?utm_source=facebook&utm_content=anuncio_hoy' }, ahora);
+  const evAyer = normalizar({ t: 'visita', u: '/?utm_source=facebook&utm_content=anuncio_ayer' }, ayerHora);
+
+  // Resumen general de 7 dias
+  const res7 = resumir([evHoy, evAyer], { ahora, dias: 7, zona });
+  assert.equal(res7.totales.visitas, 2);
+  const recHoy = res7.recientes.find((r) => r.utm_content === 'anuncio_hoy');
+  const recAyer = res7.recientes.find((r) => r.utm_content === 'anuncio_ayer');
+  assert.equal(recHoy.es_hoy, true);
+  assert.equal(recHoy.es_ayer, false);
+  assert.equal(recAyer.es_hoy, false);
+  assert.equal(recAyer.es_ayer, true);
+
+  // Resumen solo hoy
+  const resHoy = resumir([evHoy], { ahora, periodo: 'hoy', zona });
+  assert.equal(resHoy.totales.visitas, 1);
+  assert.equal(resHoy.porDia.length, 1);
+  assert.equal(resHoy.porDia[0].dia, diaEn(ahora, zona));
+
+  // Resumen solo ayer
+  const resAyer = resumir([evAyer], { ahora, periodo: 'ayer', zona });
+  assert.equal(resAyer.totales.visitas, 1);
+  assert.equal(resAyer.porDia.length, 1);
+  assert.equal(resAyer.porDia[0].dia, diaEn(ayerHora, zona));
+});
+
+test('VISITAS: endpoint /api/visitas/resumen soporta ?periodo=hoy y ?periodo=ayer', async () => {
+  _reiniciar();
+  const app = createApp();
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://127.0.0.1:${server.address().port}/api/visitas`;
+
+  try {
+    const clave = encodeURIComponent(claveDelDash());
+    const rHoy = await fetch(`${base}/resumen?periodo=hoy&clave=${clave}`);
+    assert.equal(rHoy.status, 200);
+    const dHoy = await rHoy.json();
+    assert.equal(dHoy.periodo, 'hoy');
+    assert.equal(dHoy.dias, 1);
+
+    const rAyer = await fetch(`${base}/resumen?periodo=ayer&clave=${clave}`);
+    assert.equal(rAyer.status, 200);
+    const dAyer = await rAyer.json();
+    assert.equal(dAyer.periodo, 'ayer');
+    assert.equal(dAyer.dias, 1);
+  } finally {
+    server.close();
+  }
 });
