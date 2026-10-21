@@ -19,7 +19,7 @@ import crypto from 'crypto';
 import { query } from '../database/pool.js';
 import { config } from '../config/index.js';
 
-const TIPOS = new Set(['visita', 'clic_comprar']);
+const TIPOS = new Set(['visita', 'clic_comprar', 'scroll_25', 'scroll_50', 'scroll_75', 'scroll_100', 'tiempo_30s']);
 const MAX_MEMORIA = 20000;
 const PAUSA_DB_MS = 5 * 60 * 1000;
 const ZONA = 'America/Asuncion';

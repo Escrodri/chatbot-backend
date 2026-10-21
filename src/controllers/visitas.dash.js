@@ -177,6 +177,8 @@ export const DASH_HTML = String.raw`<!doctype html>
   .badge-tipo { font-size: .72rem; font-weight: 800; padding: 3px 9px; border-radius: 99px; text-transform: uppercase; letter-spacing: .04em; }
   .badge-tipo.visita { background: var(--acento-fondo); color: var(--acento-osc); }
   .badge-tipo.clic { background: var(--barra2); color: #fff; }
+  .badge-tipo.scroll { background: #ede9fe; color: #5b21b6; }
+  .badge-tipo.tiempo { background: #e0f2fe; color: #0369a1; }
 
   /* Etiquetas de anuncio y parámetros */
   .evento-cuerpo { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
@@ -324,6 +326,7 @@ export const DASH_HTML = String.raw`<!doctype html>
         <button type="button" class="filtro-chip" data-f-tipo="todos" aria-pressed="true">Todos (<span id="contTodos">0</span>)</button>
         <button type="button" class="filtro-chip" data-f-tipo="visita" aria-pressed="false">🟢 Visitas (<span id="contVisitas">0</span>)</button>
         <button type="button" class="filtro-chip" data-f-tipo="clic_comprar" aria-pressed="false">🟠 Clics Comprar (<span id="contClics">0</span>)</button>
+        <button type="button" class="filtro-chip" data-f-tipo="lectura" aria-pressed="false">📜 Lecturas (<span id="contLecturas">0</span>)</button>
 
         <!-- Filtro Origen -->
         <button type="button" class="filtro-chip" data-f-origen="todos" aria-pressed="true">Todo origen</button>
@@ -480,17 +483,20 @@ export const DASH_HTML = String.raw`<!doctype html>
     var lista = datosActuales.recientes;
 
     // Actualizar contadores en los botones de filtro
-    var totV = 0, totC = 0;
-    lista.forEach(function (item) { if (item.tipo === "visita") totV++; else totC++; });
+    var totV = 0, totC = 0, totL = 0;
+    lista.forEach(function (item) { if (item.tipo === "visita") totV++; else if (item.tipo === "clic_comprar") totC++; else totL++; });
     document.getElementById("contTodos").textContent = String(lista.length);
     document.getElementById("contVisitas").textContent = String(totV);
     document.getElementById("contClics").textContent = String(totC);
+    var elL = document.getElementById("contLecturas"); if (elL) elL.textContent = String(totL);
 
     // Aplicar filtros
     var qTxt = filtroTexto.toLowerCase().trim();
     var filtrados = lista.filter(function (e) {
       // Filtro Tipo
-      if (filtroTipo !== "todos" && e.tipo !== filtroTipo) return false;
+      if (filtroTipo === "lectura") {
+        if (!e.tipo || (e.tipo.indexOf("scroll_") !== 0 && e.tipo !== "tiempo_30s")) return false;
+      } else if (filtroTipo !== "todos" && e.tipo !== filtroTipo) return false;
       // Filtro Dispositivo
       if (filtroDisp !== "todos" && e.disp !== filtroDisp) return false;
       // Filtro Origen
@@ -567,8 +573,14 @@ export const DASH_HTML = String.raw`<!doctype html>
         // Insignia de tipo
         if (e.tipo === "visita") {
           meta.appendChild(el("span", "badge-tipo visita", "Visita"));
-        } else {
+        } else if (e.tipo === "clic_comprar") {
           meta.appendChild(el("span", "badge-tipo clic", "🛒 Clic en Comprar"));
+        } else if (e.tipo && e.tipo.indexOf("scroll_") === 0) {
+          meta.appendChild(el("span", "badge-tipo scroll", "📜 Leyó " + e.tipo.replace("scroll_", "") + "%"));
+        } else if (e.tipo === "tiempo_30s") {
+          meta.appendChild(el("span", "badge-tipo tiempo", "⏱️ Leyó +30s"));
+        } else {
+          meta.appendChild(el("span", "badge-tipo", e.tipo || "Evento"));
         }
 
         top.appendChild(meta);
